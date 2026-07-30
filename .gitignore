@@ -26,3 +26,5 @@ keystore/
 *.keystore
 *.pem
 *.p12
+
+.cursor/

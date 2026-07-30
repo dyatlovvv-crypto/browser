@@ -42,7 +42,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
-import ru.srr.safari.BuildConfig
 import ru.srr.safari.data.Bookmark
 import ru.srr.safari.data.BrowserRepository
 import ru.srr.safari.data.HistoryEntry
