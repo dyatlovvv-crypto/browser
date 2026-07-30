@@ -20,8 +20,6 @@ android {
         versionName = appVersionName
         resValue("string", "app_name", "Safari")
         resValue("string", "app_version", appVersionName)
-
-        buildConfigField("String", "AUTHOR_MARK", "\"© СпустяРуковаРекордс\"")
     }
 
     val keystorePropsFile = rootProject.file("keystore.properties")
@@ -76,7 +74,6 @@ android {
 
     buildFeatures {
         viewBinding = true
-        buildConfig = true
     }
 
     lint {

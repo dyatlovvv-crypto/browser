@@ -2,6 +2,3 @@
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
-
--keep class ru.srr.safari.BuildConfig { *; }
-

@@ -122,15 +122,6 @@
                     android:overScrollMode="never"
                     android:visibility="gone" />
 
-                <TextView
-                    android:id="@+id/startAuthor"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="28dp"
-                    android:gravity="center"
-                    android:text="© СпустяРуковаРекордс"
-                    android:textColor="@color/safari_start_muted"
-                    android:textSize="12sp" />
             </LinearLayout>
         </androidx.core.widget.NestedScrollView>
 

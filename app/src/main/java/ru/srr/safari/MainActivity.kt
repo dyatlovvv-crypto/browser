@@ -867,7 +867,6 @@ class MainActivity : AppCompatActivity() {
             binding.startSubtitle.setTextColor(ContextCompat.getColor(this, R.color.safari_start_muted))
             binding.startSubtitle.text =
                 "Safari не будет запоминать ваши действия в режиме «Приватный доступ»."
-            binding.startAuthor.visibility = View.GONE
             binding.recentHeader.visibility = View.GONE
             binding.btnAllHistory.visibility = View.GONE
             binding.recentHeaderRow.visibility = View.GONE
@@ -877,8 +876,6 @@ class MainActivity : AppCompatActivity() {
             binding.startTitle.setTextColor(ContextCompat.getColor(this, R.color.safari_start_title))
             binding.startTitle.text = "Избранное"
             binding.startSubtitle.visibility = View.GONE
-            binding.startAuthor.visibility = View.VISIBLE
-            binding.startAuthor.text = BuildConfig.AUTHOR_MARK
             binding.recentHeader.setTextColor(ContextCompat.getColor(this, R.color.safari_start_title))
             binding.btnAllHistory.setTextColor(ContextCompat.getColor(this, R.color.safari_start_title))
         }
