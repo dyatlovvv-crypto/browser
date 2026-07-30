@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@color/safari_icon"
+        android:pathData="M7,3.6h8.5c1.1,0 2,0.9 2,2v14.5l-6.25,-2.65L5,20.1V5.6c0,-1.1 0.9,-2 2,-2z" />
+</vector>

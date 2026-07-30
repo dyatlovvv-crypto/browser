@@ -1,0 +1,10 @@
+СпустяРуковаРекордс (SpustyaRukovaRecords)
+Приложение: Safari Browser / safari-browser
+Author-ID: srr-safari-2026
+Package: ru.srr.safari
+
+Это приложение создано и поддерживается СпустяРуковаРекордс.
+Несанкционированное копирование, переподпись и публикация под чужим именем запрещены.
+
+Public signing fingerprint: see keystore/sha256-fingerprint.txt
+License: LICENSE (proprietary, all rights reserved)

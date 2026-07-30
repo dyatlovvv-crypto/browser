@@ -1,0 +1,32 @@
+# Built
+/.gradle/
+/build/
+/app/build/
+/local.properties
+/local-maven/
+/.android-home/
+/.jdks/
+*.iml
+.idea/
+.DS_Store
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+build-log.txt
+.cxx/
+.kotlin/
+.shots/
+
+# Release signing (NEVER commit private keys / passwords)
+keystore.properties
+keystore/*.jks
+keystore/*.keystore
+keystore/BACKUP-THIS.txt
+*.jks
+*.keystore
+
+# Keep public fingerprint + README
+!keystore/README.md
+!keystore/sha256-fingerprint.txt

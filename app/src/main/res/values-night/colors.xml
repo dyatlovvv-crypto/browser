@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="safari_blue">#0A84FF</color>
+    <color name="safari_bg">#000000</color>
+    <color name="safari_page_bg">#1C1C1E</color>
+    <color name="safari_bar">#1C1C1E</color>
+    <color name="safari_capsule">#2C2C2E</color>
+    <color name="safari_text">#FFFFFF</color>
+    <color name="safari_muted">#8E8E93</color>
+    <color name="safari_icon">#F2F2F7</color>
+    <color name="safari_overlay">#1C1C1E</color>
+    <color name="safari_group">#2C2C2E</color>
+    <color name="safari_popover">#F22C2C2E</color>
+    <color name="safari_divider">#33FFFFFF</color>
+    <color name="safari_menu_hairline">#26FFFFFF</color>
+    <color name="safari_menu_section">#33FFFFFF</color>
+    <color name="safari_menu_label">#EBEBF5</color>
+    <color name="safari_private_bg">#1C1229</color>
+    <color name="safari_private_accent">#BF5AF2</color>
+    <color name="safari_white">#FFFFFF</color>
+    <color name="safari_start_title">#FFFFFF</color>
+    <color name="safari_start_muted">#CCFFFFFF</color>
+    <color name="safari_glass_fill">#E62C2C2E</color>
+    <color name="safari_glass_stroke">#44FFFFFF</color>
+    <color name="safari_circle_fill">#E02C2C2E</color>
+    <color name="safari_chrome_scrim">#CC1C1C1E</color>
+</resources>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#FFFFFF</color>
+    <color name="safari_blue">#007AFF</color>
+    <color name="safari_bg">#F2F2F7</color>
+    <color name="safari_page_bg">#FFFFFF</color>
+    <color name="safari_bar">#F9F9F9</color>
+    <color name="safari_capsule">#E5E5EA</color>
+    <color name="safari_text">#000000</color>
+    <color name="safari_muted">#8E8E93</color>
+    <color name="safari_icon">#1C1C1E</color>
+    <color name="safari_overlay">#F2F2F7</color>
+    <color name="safari_group">#FFFFFFFF</color>
+    <color name="safari_popover">#F7F7F8</color>
+    <color name="safari_divider">#28000000</color>
+    <color name="safari_menu_hairline">#1A3C3C43</color>
+    <color name="safari_menu_section">#143C3C43</color>
+    <color name="safari_menu_label">#3C3C43</color>
+    <color name="safari_private_bg">#1C1229</color>
+    <color name="safari_private_accent">#BF5AF2</color>
+    <color name="safari_white">#FFFFFF</color>
+    <color name="safari_start_title">#FFFFFF</color>
+    <color name="safari_start_muted">#CCFFFFFF</color>
+    <!-- denser frosted glass (was ~85%/80%, now ~95%/93%) -->
+    <color name="safari_glass_fill">#F2F2F4F8</color>
+    <color name="safari_glass_stroke">#66FFFFFF</color>
+    <color name="safari_circle_fill">#EEF2F4F8</color>
+    <color name="safari_chrome_scrim">#E6F2F2F7</color>
+</resources>
