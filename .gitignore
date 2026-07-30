@@ -19,14 +19,10 @@ build-log.txt
 .kotlin/
 .shots/
 
-# Release signing (NEVER commit private keys / passwords)
+# Signing (local only)
 keystore.properties
-keystore/*.jks
-keystore/*.keystore
-keystore/BACKUP-THIS.txt
+keystore/
 *.jks
 *.keystore
-
-# Keep public fingerprint + README
-!keystore/README.md
-!keystore/sha256-fingerprint.txt
+*.pem
+*.p12

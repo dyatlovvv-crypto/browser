@@ -18,20 +18,6 @@
         android:theme="@style/Theme.Safari"
         android:usesCleartextTraffic="true">
 
-        <meta-data
-            android:name="ru.srr.safari.AUTHOR"
-            android:value="СпустяРуковаРекордс" />
-        <meta-data
-            android:name="ru.srr.safari.AUTHOR_ID"
-            android:value="srr-safari-2026" />
-
-        <meta-data
-            android:name="ru.srr.safari.AUTHOR"
-            android:value="СпустяРуковаРекордс" />
-        <meta-data
-            android:name="ru.srr.safari.AUTHOR_ID"
-            android:value="srr-safari-2026" />
-
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"

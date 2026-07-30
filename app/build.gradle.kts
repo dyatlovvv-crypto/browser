@@ -21,15 +21,7 @@ android {
         resValue("string", "app_name", "Safari")
         resValue("string", "app_version", appVersionName)
 
-        // Авторство (видно в BuildConfig / APK)
-        buildConfigField("String", "AUTHOR", "\"СпустяРуковаРекордс\"")
-        buildConfigField("String", "AUTHOR_ID", "\"srr-safari-2026\"")
         buildConfigField("String", "AUTHOR_MARK", "\"© СпустяРуковаРекордс\"")
-        buildConfigField(
-            "String",
-            "SIGNING_SHA256",
-            "\"DF:39:AC:CA:E8:5C:8F:73:48:44:0B:2B:84:3C:19:9D:27:F0:1A:A8:F8:11:29:22:52:67:65:AF:6C:E4:16:50\""
-        )
     }
 
     val keystorePropsFile = rootProject.file("keystore.properties")

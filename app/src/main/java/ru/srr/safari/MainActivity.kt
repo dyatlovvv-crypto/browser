@@ -878,7 +878,7 @@ class MainActivity : AppCompatActivity() {
             binding.startTitle.text = "Избранное"
             binding.startSubtitle.visibility = View.GONE
             binding.startAuthor.visibility = View.VISIBLE
-            binding.startAuthor.text = "${BuildConfig.AUTHOR_MARK} · ${BuildConfig.AUTHOR_ID}"
+            binding.startAuthor.text = BuildConfig.AUTHOR_MARK
             binding.recentHeader.setTextColor(ContextCompat.getColor(this, R.color.safari_start_title))
             binding.btnAllHistory.setTextColor(ContextCompat.getColor(this, R.color.safari_start_title))
         }
