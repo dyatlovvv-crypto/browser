@@ -11,7 +11,3 @@ Android-браузер с интерфейсом в духе Safari.
 ```
 
 Release: положи `keystore.properties` в корень и собери `assembleRelease`.
-
-## Версия
-
-Смотри `versionName` / `versionCode` в `app/build.gradle.kts`.
