@@ -1,26 +1,40 @@
 package ru.srr.safari
 
 import android.annotation.SuppressLint
+import android.app.DownloadManager
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.view.KeyEvent
 import android.view.View
-import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
+import android.webkit.SslErrorHandler
+import android.webkit.URLUtil
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.TextView
 import android.widget.Toast
+import android.net.http.SslError
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -30,6 +44,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +59,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import ru.srr.safari.data.Bookmark
 import ru.srr.safari.data.BrowserRepository
+import ru.srr.safari.data.BrowserSettings
 import ru.srr.safari.data.HistoryEntry
 import ru.srr.safari.databinding.ActivityMainBinding
 import ru.srr.safari.databinding.DialogSafariMoreBinding
@@ -53,12 +69,18 @@ import ru.srr.safari.databinding.ItemHistorySectionBinding
 import ru.srr.safari.databinding.ItemSimpleBinding
 import ru.srr.safari.databinding.ItemSuggestionBinding
 import ru.srr.safari.databinding.ItemTabBinding
+import ru.srr.safari.engine.AdBlocker
+import ru.srr.safari.engine.CosmeticAdScript
 import ru.srr.safari.engine.InPageTranslateScript
 import ru.srr.safari.engine.PageTranslator
 import ru.srr.safari.engine.ReaderModeScript
 import ru.srr.safari.engine.Suggestion
 import ru.srr.safari.engine.SuggestionProvider
 import ru.srr.safari.engine.UrlUtils
+import ru.srr.safari.ui.GlassSheet
+import ru.srr.safari.ui.LiquidGlass
+import ru.srr.safari.ui.SafariMotion
+import java.io.File
 import java.util.Calendar
 import java.util.UUID
 import kotlin.coroutines.resume
@@ -67,6 +89,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var repo: BrowserRepository
+    private lateinit var settings: BrowserSettings
+    private lateinit var adBlocker: AdBlocker
 
     private data class Tab(
         val id: String = UUID.randomUUID().toString(),
@@ -91,6 +115,62 @@ class MainActivity : AppCompatActivity() {
     private var favoritesEditing = false
     private val tabPreviews = mutableMapOf<String, Bitmap>()
     private val historySectionExpanded = mutableMapOf<String, Boolean>()
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var tabsRestored = false
+
+    private val SCROLL_BOOT_JS = """
+            (function(){
+              if (window.__safariScrollHooked) return;
+              window.__safariScrollHooked = true;
+              var last = 0;
+              var ticking = false;
+              function report(){
+                ticking = false;
+                var y = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+                if (Math.abs(y - last) < 2) return;
+                last = y;
+                try { SafariChrome.onScroll(Math.round(y)); } catch(e) {}
+              }
+              window.addEventListener('scroll', function(){
+                if (!ticking) { ticking = true; requestAnimationFrame(report); }
+              }, {passive:true});
+              document.addEventListener('scroll', function(){
+                if (!ticking) { ticking = true; requestAnimationFrame(report); }
+              }, {passive:true, capture:true});
+            })();
+        """.trimIndent()
+
+    private val fileChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val callback = filePathCallback
+            filePathCallback = null
+            if (callback == null) return@registerForActivityResult
+            val data = result.data
+            val uris = when {
+                result.resultCode != RESULT_OK -> null
+                data?.clipData != null -> {
+                    Array(data.clipData!!.itemCount) { i -> data.clipData!!.getItemAt(i).uri }
+                }
+                data?.data != null -> arrayOf(data.data!!)
+                else -> null
+            }
+            callback.onReceiveValue(uris)
+        }
+
+    private val wallpaperPicker =
+        registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            lifecycleScope.launch {
+                val ok = withContext(Dispatchers.IO) { copyWallpaperFromUri(uri) }
+                if (ok) {
+                    settings.wallpaperId = "custom"
+                    applyWallpaper()
+                    Toast.makeText(this@MainActivity, "Обои обновлены", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "Не удалось взять фото", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
 
     private val defaultFavorites = listOf(
         Bookmark(title = "Google", url = "https://www.google.com"),
@@ -111,18 +191,27 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         repo = (application as SafariApp).repository
+        settings = BrowserSettings(this)
+        adBlocker = AdBlocker(this)
+        adBlocker.enabled = settings.adBlockEnabled
+        applyWallpaper()
 
-        ViewCompat.setOnApplyWindowInsetsListener(binding.contentContainer) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            // Контент не залезает под статусбар / вырез
-            v.updatePadding(top = bars.top)
-            insets
-        }
-        ViewCompat.setOnApplyWindowInsetsListener(binding.bottomChrome) { v, insets ->
-            val sys = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-            val bottom = maxOf(sys.bottom, ime.bottom)
-            v.updatePadding(bottom = bottom)
+            // Контент и оверлеи не залезают под статусбар / вырез
+            binding.contentContainer.updatePadding(top = bars.top)
+            binding.historyOverlay.getChildAt(0)?.updatePadding(top = bars.top + (12 * resources.displayMetrics.density).toInt())
+            binding.tabsList.updatePadding(
+                top = bars.top + (12 * resources.displayMetrics.density).toInt(),
+                bottom = binding.tabsList.paddingBottom
+            )
+            binding.readerOverlay.updatePadding(top = bars.top, bottom = bars.bottom)
+            val bottom = maxOf(bars.bottom, ime.bottom)
+            binding.bottomChrome.updatePadding(bottom = bottom)
+            binding.tabsBottomBar.updatePadding(bottom = bars.bottom)
             val keyboardOpen = ime.bottom > 0
             if (keyboardOpen != imeVisible) {
                 imeVisible = keyboardOpen
@@ -131,18 +220,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 updateChromeForState()
             } else if (keyboardOpen) {
-                v.translationY = 0f
+                binding.bottomChrome.translationY = 0f
             }
-            insets
-        }
-        ViewCompat.setOnApplyWindowInsetsListener(binding.suggestionsList) { v, insets ->
-            // contentContainer уже учитывает статусбар — сверху только небольшой отступ
-            v.updatePadding(top = 8)
-            insets
-        }
-        ViewCompat.setOnApplyWindowInsetsListener(binding.readerOverlay) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.updatePadding(top = bars.top, bottom = bars.bottom)
             insets
         }
         ViewCompat.requestApplyInsets(binding.root)
@@ -151,7 +230,8 @@ class MainActivity : AppCompatActivity() {
         setupChrome()
         setupLists()
         observeData()
-        showStartPage()
+        restoreTabsIfNeeded()
+        if (!tabsRestored) showStartPage()
 
         intent?.data?.toString()?.let { loadUrl(it) }
 
@@ -193,13 +273,31 @@ class MainActivity : AppCompatActivity() {
             settings.loadWithOverviewMode = true
             settings.builtInZoomControls = true
             settings.displayZoomControls = false
+            settings.setSupportMultipleWindows(false)
+            settings.allowFileAccess = true
+            settings.allowContentAccess = true
+            settings.mediaPlaybackRequiresUserGesture = true
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            settings.userAgentString =
-                "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+            settings.textZoom = this@MainActivity.settings.textZoom
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                settings.offscreenPreRaster = true
+            }
+            applyUserAgent()
             addJavascriptInterface(ScrollBridge(), "SafariChrome")
+            try {
+                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                    this,
+                    CosmeticAdScript.JS + "\n" + SCROLL_BOOT_JS,
+                    setOf("*")
+                )
+            } catch (_: Throwable) {
+                // Older WebView — fall back to onPageFinished inject
+            }
             setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
                 onContentScroll(scrollY - oldScrollY, scrollY)
+            }
+            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                enqueueDownload(url, userAgent, contentDisposition, mimeType)
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -212,10 +310,39 @@ class MainActivity : AppCompatActivity() {
                     if (u.isBlank() || u == "about:blank") return
                     active.title = title?.ifBlank { UrlUtils.displayHost(u) } ?: active.title
                 }
+
+                override fun onShowFileChooser(
+                    webView: WebView?,
+                    filePathCallback: ValueCallback<Array<Uri>>?,
+                    fileChooserParams: FileChooserParams?
+                ): Boolean {
+                    this@MainActivity.filePathCallback?.onReceiveValue(null)
+                    this@MainActivity.filePathCallback = filePathCallback
+                    return try {
+                        val intent = fileChooserParams?.createIntent()
+                            ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                                type = "*/*"
+                            }
+                        fileChooserLauncher.launch(intent)
+                        true
+                    } catch (_: Exception) {
+                        this@MainActivity.filePathCallback = null
+                        false
+                    }
+                }
             }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val u = request?.url?.toString().orEmpty()
+                    if (u.isBlank()) return true
+                    if (u.startsWith("tel:") || u.startsWith("mailto:") || u.startsWith("sms:")) {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)))
+                        } catch (_: Exception) {
+                        }
+                        return true
+                    }
                     if (!(u.startsWith("http") || u.startsWith("about:"))) return true
                     val rewritten = UrlUtils.rewriteKnownRedirects(u)
                     if (rewritten != u) {
@@ -223,6 +350,16 @@ class MainActivity : AppCompatActivity() {
                         return true
                     }
                     return false
+                }
+
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): WebResourceResponse? {
+                    if (request == null) return null
+                    return if (adBlocker.shouldBlock(request.url, request.isForMainFrame)) {
+                        adBlocker.emptyResponse()
+                    } else null
                 }
 
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -256,12 +393,112 @@ class MainActivity : AppCompatActivity() {
                     if (!editingAddress) refreshAddressDisplay()
                     updateChromeForState()
                     injectScrollObserver()
-                    if (!isPrivate) {
-                        lifecycleScope.launch { repo.addHistory(active.title, u) }
+                    // Cosmetic CSS usually already via document-start; re-apply cheaply if needed
+                    if (adBlocker.enabled) {
+                        view?.evaluateJavascript(CosmeticAdScript.JS, null)
                     }
+                    if (!isPrivate) {
+                        val title = active.title
+                        lifecycleScope.launch { repo.addHistory(title, u) }
+                    }
+                }
+
+                override fun onReceivedError(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                    error: WebResourceError?
+                ) {
+                    if (request?.isForMainFrame != true) return
+                    val current = view?.url?.takeIf { it.isNotBlank() && it != "about:blank" }
+                    if (current != null) {
+                        active.url = current
+                        active.title = UrlUtils.displayHost(current)
+                        if (!editingAddress) refreshAddressDisplay()
+                    }
+                    val desc = error?.description?.toString().orEmpty()
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Не удалось загрузить страницу${if (desc.isNotBlank()) ": $desc" else ""}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+
+                override fun onReceivedSslError(
+                    view: WebView?,
+                    handler: SslErrorHandler?,
+                    error: SslError?
+                ) {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Проблема с сертификатом")
+                        .setMessage("Соединение может быть небезопасным. Открыть страницу всё равно?")
+                        .setPositiveButton("Открыть") { _, _ -> handler?.proceed() }
+                        .setNegativeButton("Отмена") { _, _ -> handler?.cancel() }
+                        .setOnCancelListener { handler?.cancel() }
+                        .show()
                 }
             }
         }
+    }
+
+    private fun applyUserAgent() {
+        binding.webView.settings.userAgentString = if (settings.desktopMode) {
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        } else {
+            "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+        }
+    }
+
+    private fun enqueueDownload(
+        url: String,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimeType: String?
+    ) {
+        try {
+            val name = URLUtil.guessFileName(url, contentDisposition, mimeType)
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                setMimeType(mimeType)
+                addRequestHeader("User-Agent", userAgent.orEmpty())
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setTitle(name)
+                setDescription(url)
+                setDestinationInExternalFilesDir(this@MainActivity, Environment.DIRECTORY_DOWNLOADS, name)
+                setAllowedOverMetered(true)
+                setAllowedOverRoaming(true)
+            }
+            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+            dm.enqueue(request)
+            Toast.makeText(this, "Скачивание: $name", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Не удалось скачать файл", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun restoreTabsIfNeeded() {
+        val saved = repo.snapshotNormalTabs().filter {
+            it.url.isNotBlank() && it.url != "about:blank"
+        }
+        if (saved.isEmpty()) return
+        tabs.clear()
+        saved.forEach { entity ->
+            tabs += Tab(
+                id = entity.id.ifBlank { UUID.randomUUID().toString() },
+                title = entity.title.ifBlank { UrlUtils.displayHost(entity.url) },
+                url = entity.url,
+                isPrivate = false,
+                isStartPage = false
+            )
+        }
+        if (tabs.isEmpty()) tabs += Tab()
+        activeId = tabs.first().id
+        isPrivate = false
+        tabsRestored = true
+        updateTabCount()
+        applyPrivateUi()
+        val first = tabs.first()
+        if (first.url.isNotBlank()) loadUrl(first.url) else showStartPage()
     }
 
     private inner class ScrollBridge {
@@ -276,28 +513,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun injectScrollObserver() {
-        val js = """
-            (function(){
-              if (window.__safariScrollHooked) return;
-              window.__safariScrollHooked = true;
-              var last = 0;
-              var ticking = false;
-              function report(){
-                ticking = false;
-                var y = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
-                if (Math.abs(y - last) < 2) return;
-                last = y;
-                try { SafariChrome.onScroll(Math.round(y)); } catch(e) {}
-              }
-              window.addEventListener('scroll', function(){
-                if (!ticking) { ticking = true; requestAnimationFrame(report); }
-              }, {passive:true});
-              document.addEventListener('scroll', function(){
-                if (!ticking) { ticking = true; requestAnimationFrame(report); }
-              }, {passive:true, capture:true});
-            })();
-        """.trimIndent()
-        binding.webView.evaluateJavascript(js, null)
+        binding.webView.evaluateJavascript(SCROLL_BOOT_JS, null)
     }
 
     private fun onContentScroll(dy: Int, scrollY: Int) {
@@ -335,10 +551,20 @@ class MainActivity : AppCompatActivity() {
             val h = chrome.height.toFloat().coerceAtLeast(1f)
             if (collapsed) {
                 hideSuggestions()
-                chrome.animate().translationY(h).setDuration(180).start()
+                chrome.animate()
+                    .translationY(h)
+                    .alpha(0.92f)
+                    .setDuration(SafariMotion.CHROME)
+                    .setInterpolator(SafariMotion.softIn)
+                    .start()
             } else {
-                chrome.translationY = 0f
-                chrome.animate().translationY(0f).setDuration(180).start()
+                chrome.visibility = View.VISIBLE
+                chrome.animate()
+                    .translationY(0f)
+                    .alpha(1f)
+                    .setDuration(SafariMotion.CHROME)
+                    .setInterpolator(SafariMotion.softOut)
+                    .start()
             }
         }
     }
@@ -349,6 +575,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupChrome() {
+        LiquidGlass.polishChrome(binding.bottomChrome)
+        LiquidGlass.polishCapsule(binding.addressCapsule)
+        LiquidGlass.polishCircle(binding.btnBack)
+        LiquidGlass.polishCircle(binding.btnMore)
+        LiquidGlass.polishSheet(binding.tabsOverlay)
+        LiquidGlass.polishSheet(binding.historyOverlay)
+        LiquidGlass.polishCapsule(binding.tabsBottomBar, 28f)
+        LiquidGlass.polishCapsule(binding.tabsCountPill, 20f)
+        LiquidGlass.polishCircle(binding.btnNewTab)
+        LiquidGlass.polishCircle(binding.btnTabsDone)
+        LiquidGlass.polishCapsule(binding.historyToolbar, 22f)
+        LiquidGlass.polishSheet(binding.suggestionsList)
+        LiquidGlass.polishSheet(binding.btnCloseReader)
+        applyGlassOpacity()
+
         binding.addressBar.setOnEditorActionListener { _, actionId, event ->
             if (actionId == EditorInfo.IME_ACTION_GO ||
                 (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
@@ -518,29 +759,33 @@ class MainActivity : AppCompatActivity() {
 
     private fun showMoreMenu() {
         val menu = DialogSafariMoreBinding.inflate(layoutInflater)
-        val width = (250 * resources.displayMetrics.density).toInt()
+        val width = (228 * resources.displayMetrics.density).toInt()
         val popup = PopupWindow(
             menu.root,
             width,
             android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
             true
         )
-        popup.elevation = 18f
+        popup.elevation = 24f
         popup.isOutsideTouchable = true
         popup.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-        // скругление карточки
+        // скругление + liquid glass card
         menu.root.clipToOutline = true
         (menu.root.getChildAt(0) as? View)?.let { card ->
-            card.outlineProvider = object : android.view.ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, 26f * resources.displayMetrics.density)
-                }
-            }
-            card.clipToOutline = true
+            LiquidGlass.polishCapsule(card, 26f)
+            card.background = LiquidGlass.popoverDrawable(this, settings.glassOpacity)
         }
         fun closeAnd(action: () -> Unit) {
-            popup.dismiss()
-            action()
+            val card = menu.root.getChildAt(0)
+            if (card != null) {
+                SafariMotion.disappear(card, toScale = 0.94f, toY = 8f * resources.displayMetrics.density, duration = 110L) {
+                    popup.dismiss()
+                    action()
+                }
+            } else {
+                popup.dismiss()
+                action()
+            }
         }
         fun addCurrentBookmark() {
             val url = active.url
@@ -556,6 +801,7 @@ class MainActivity : AppCompatActivity() {
         menu.moreAddFolder.setOnClickListener { closeAnd { addCurrentBookmark() } }
         menu.moreNewTab.setOnClickListener { closeAnd { newTab(false) } }
         menu.moreNewPrivate.setOnClickListener { closeAnd { newTab(true) } }
+        menu.moreSettings.setOnClickListener { closeAnd { showSettingsMenu() } }
         menu.moreBookmarks.setOnClickListener { closeAnd { showBookmarks() } }
         menu.moreTabs.setOnClickListener { closeAnd { showTabs() } }
         menu.root.measure(
@@ -565,6 +811,86 @@ class MainActivity : AppCompatActivity() {
         val yOff = -(menu.root.measuredHeight + binding.btnMore.height + (8 * resources.displayMetrics.density).toInt())
         val xOff = binding.btnMore.width - width
         popup.showAsDropDown(binding.btnMore, xOff, yOff)
+        (menu.root.getChildAt(0) as? View)?.let { card ->
+            SafariMotion.appear(
+                card,
+                fromScale = 0.92f,
+                fromY = 10f * resources.displayMetrics.density,
+                duration = SafariMotion.POPOVER
+            )
+        }
+    }
+
+    private fun applyGlassOpacity() {
+        val o = settings.glassOpacity
+        binding.addressCapsule.background = LiquidGlass.capsuleDrawable(this, o, 22f)
+        binding.btnBack.background = LiquidGlass.circleDrawable(this, o)
+        binding.btnMore.background = LiquidGlass.circleDrawable(this, o)
+        binding.tabsBottomBar.background = LiquidGlass.capsuleDrawable(this, o, 28f)
+        binding.tabsCountPill.background = LiquidGlass.capsuleDrawable(this, o, 20f)
+        binding.btnNewTab.background = LiquidGlass.circleDrawable(this, o)
+        binding.historyToolbar.background = LiquidGlass.capsuleDrawable(this, o, 22f)
+        LiquidGlass.applyOpacity(binding.btnTabsDone, o)
+        LiquidGlass.applyOpacity(binding.tabsOverlay, o)
+        LiquidGlass.applyOpacity(binding.historyOverlay, o)
+        LiquidGlass.applyOpacity(binding.suggestionsList, o)
+        LiquidGlass.applyOpacity(binding.btnCloseReader, o)
+        binding.favoritesList.adapter?.notifyDataSetChanged()
+        binding.tabsList.adapter?.notifyDataSetChanged()
+    }
+
+    private fun showGlassOpacityPicker() {
+        val dialog = android.app.Dialog(this, R.style.Theme_Safari_GlassDialog)
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
+        )
+        val sheet = ru.srr.safari.databinding.DialogGlassOpacityBinding.inflate(layoutInflater)
+        fun paint(value: Int) {
+            sheet.opacityValue.text = "$value%"
+            sheet.opacityPreview.background = LiquidGlass.capsuleDrawable(this, value, 22f)
+            sheet.opacityCard.background = LiquidGlass.popoverDrawable(this, value)
+        }
+        val current = settings.glassOpacity
+        sheet.opacitySeek.max = BrowserSettings.MAX_GLASS_OPACITY - BrowserSettings.MIN_GLASS_OPACITY
+        sheet.opacitySeek.progress = current - BrowserSettings.MIN_GLASS_OPACITY
+        paint(current)
+        LiquidGlass.polishCapsule(sheet.opacityCard, 26f)
+        LiquidGlass.polishCapsule(sheet.opacityPreview, 22f)
+        sheet.opacitySeek.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                val value = progress + BrowserSettings.MIN_GLASS_OPACITY
+                settings.glassOpacity = value
+                paint(value)
+                applyGlassOpacity()
+            }
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+        })
+        sheet.opacityDone.setOnClickListener { dialog.dismiss() }
+        dialog.setContentView(sheet.root)
+        dialog.show()
+        dialog.window?.setLayout(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        SafariMotion.appear(sheet.opacityCard, fromScale = 0.94f, fromY = 12f * resources.displayMetrics.density)
+    }
+
+    private fun showSettingsMenu() {
+        val adLabel = if (settings.adBlockEnabled) "Блокировка рекламы: вкл." else "Блокировка рекламы: выкл."
+        GlassSheet.showList(
+            this,
+            title = "Настройки",
+            items = listOf(
+                GlassSheet.Item(adLabel) { toggleAdBlock(reloadPage = false) },
+                GlassSheet.Item("Обои стартовой") { showWallpaperPicker() },
+                GlassSheet.Item("Прозрачность стекла (${settings.glassOpacity}%)") {
+                    showGlassOpacityPicker()
+                }
+            )
+        )
     }
 
     private fun showPageMenu() {
@@ -572,21 +898,203 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Откройте страницу", Toast.LENGTH_SHORT).show()
             return
         }
-        AlertDialog.Builder(this)
-            .setTitle("Параметры страницы")
-            .setItems(
-                arrayOf(
-                    "Показать режим чтения",
-                    "Перевести сайт…",
-                    "Отмена"
-                )
-            ) { _, which ->
-                when (which) {
-                    0 -> openReader()
-                    1 -> translate("ru")
-                }
+        val menu = ru.srr.safari.databinding.DialogPageAaBinding.inflate(layoutInflater)
+        val width = (268 * resources.displayMetrics.density).toInt()
+        val popup = PopupWindow(
+            menu.root,
+            width,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            true
+        )
+        popup.isOutsideTouchable = true
+        popup.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        menu.aaDesktopLabel.text =
+            if (settings.desktopMode) "Мобильная версия" else "Версия для компьютера"
+        LiquidGlass.polishCapsule(menu.aaCard, 26f)
+        menu.aaCard.background = LiquidGlass.popoverDrawable(this, settings.glassOpacity)
+
+        fun closeAnd(action: () -> Unit) {
+            SafariMotion.disappear(menu.aaCard, toScale = 0.94f, duration = 110L) {
+                popup.dismiss()
+                action()
             }
-            .show()
+        }
+        fun applyZoom(delta: Int) {
+            settings.textZoom = settings.textZoom + delta
+            binding.webView.settings.textZoom = settings.textZoom
+            Toast.makeText(this, "Шрифт ${settings.textZoom}%", Toast.LENGTH_SHORT).show()
+        }
+        menu.aaReader.setOnClickListener { closeAnd { openReader() } }
+        menu.aaTranslate.setOnClickListener { closeAnd { translate("ru") } }
+        menu.aaFind.setOnClickListener { closeAnd { showFindInPage() } }
+        menu.aaFindBar.setOnClickListener { closeAnd { showFindInPage() } }
+        menu.aaDesktop.setOnClickListener {
+            closeAnd {
+                settings.desktopMode = !settings.desktopMode
+                applyUserAgent()
+                binding.webView.reload()
+            }
+        }
+        menu.aaFontMinus.setOnClickListener {
+            applyZoom(-BrowserSettings.TEXT_ZOOM_STEP)
+        }
+        menu.aaFontPlus.setOnClickListener {
+            applyZoom(BrowserSettings.TEXT_ZOOM_STEP)
+        }
+        menu.aaMoreBar.setOnClickListener { closeAnd { showMoreMenu() } }
+
+        menu.root.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val yOff = -(menu.root.measuredHeight + binding.btnAa.height + (6 * resources.displayMetrics.density).toInt())
+        val xOff = ((binding.btnAa.width - width) / 2f).toInt()
+        popup.showAsDropDown(binding.btnAa, xOff, yOff)
+        SafariMotion.appear(menu.aaCard, fromScale = 0.92f, fromY = 8f * resources.displayMetrics.density)
+    }
+
+    private fun toggleAdBlock(reloadPage: Boolean) {
+        settings.adBlockEnabled = !settings.adBlockEnabled
+        adBlocker.enabled = settings.adBlockEnabled
+        if (!active.isStartPage && active.url.isNotBlank()) {
+            if (settings.adBlockEnabled) {
+                binding.webView.evaluateJavascript(CosmeticAdScript.JS, null)
+            } else {
+                binding.webView.evaluateJavascript(CosmeticAdScript.REMOVE_JS, null)
+            }
+            if (reloadPage) binding.webView.reload()
+        }
+        Toast.makeText(
+            this,
+            if (settings.adBlockEnabled) "Блокировка рекламы включена" else "Блокировка рекламы выключена",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    private fun showWallpaperPicker() {
+        GlassSheet.showList(
+            this,
+            title = "Обои стартовой",
+            items = listOf(
+                GlassSheet.Item("По умолчанию") {
+                    settings.wallpaperId = "default"
+                    applyWallpaper()
+                },
+                GlassSheet.Item("Океан") {
+                    settings.wallpaperId = "ocean"
+                    applyWallpaper()
+                },
+                GlassSheet.Item("Закат") {
+                    settings.wallpaperId = "dusk"
+                    applyWallpaper()
+                },
+                GlassSheet.Item("Лес") {
+                    settings.wallpaperId = "forest"
+                    applyWallpaper()
+                },
+                GlassSheet.Item("Песок") {
+                    settings.wallpaperId = "sand"
+                    applyWallpaper()
+                },
+                GlassSheet.Item("Из галереи…") {
+                    wallpaperPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                }
+            )
+        )
+    }
+
+    private fun copyWallpaperFromUri(uri: Uri): Boolean {
+        return try {
+            val out = File(filesDir, BrowserSettings.WALLPAPER_FILE)
+            contentResolver.openInputStream(uri)?.use { input ->
+                out.outputStream().use { output -> input.copyTo(output) }
+            } ?: return false
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun applyWallpaper() {
+        val view = binding.wallpaperView
+        val id = settings.wallpaperId
+        if (id == "custom") {
+            view.setImageDrawable(null)
+            view.background = null
+            lifecycleScope.launch {
+                val bmp = withContext(Dispatchers.IO) {
+                    val file = File(filesDir, BrowserSettings.WALLPAPER_FILE)
+                    if (!file.exists()) return@withContext null
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(file.absolutePath, bounds)
+                    val maxSide = 2048
+                    var sample = 1
+                    while ((bounds.outWidth / sample) > maxSide || (bounds.outHeight / sample) > maxSide) {
+                        sample *= 2
+                    }
+                    val opts = BitmapFactory.Options().apply {
+                        inSampleSize = sample
+                        inPreferredConfig = Bitmap.Config.RGB_565
+                    }
+                    BitmapFactory.decodeFile(file.absolutePath, opts)
+                }
+                if (settings.wallpaperId != "custom") return@launch
+                if (bmp != null) {
+                    view.setImageBitmap(bmp)
+                } else {
+                    view.setBackgroundResource(R.drawable.bg_start_wallpaper)
+                }
+                updateWallpaperVisibility()
+            }
+        } else {
+            view.setImageDrawable(null)
+            when (id) {
+                "ocean" -> view.setBackgroundResource(R.drawable.bg_wall_ocean)
+                "dusk" -> view.setBackgroundResource(R.drawable.bg_wall_dusk)
+                "forest" -> view.setBackgroundResource(R.drawable.bg_wall_forest)
+                "sand" -> view.setBackgroundResource(R.drawable.bg_wall_sand)
+                else -> view.setBackgroundResource(R.drawable.bg_start_wallpaper)
+            }
+            updateWallpaperVisibility()
+        }
+    }
+
+    private fun updateWallpaperVisibility() {
+        val onStart = !::binding.isInitialized ||
+            active.isStartPage ||
+            active.url.isBlank() ||
+            active.url == "about:blank" ||
+            binding.startPage.visibility == View.VISIBLE
+        binding.wallpaperView.visibility = if (onStart) View.VISIBLE else View.GONE
+    }
+
+    private fun showFindInPage() {
+        if (active.isStartPage) {
+            Toast.makeText(this, "Откройте страницу", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val input = EditText(this).apply {
+            hint = "Найти на странице"
+            setSingleLine()
+        }
+        GlassSheet.showInput(
+            this,
+            title = "Найти",
+            input = input,
+            positive = "Искать",
+            onPositive = {
+                val q = input.text?.toString().orEmpty()
+                if (q.isBlank()) return@showInput
+                binding.webView.findAllAsync(q)
+                binding.webView.findNext(true)
+            },
+            neutral = "Далее",
+            onNeutral = { binding.webView.findNext(true) },
+            negative = "Закрыть",
+            onNegative = { binding.webView.clearMatches() }
+        )
     }
 
     private fun showKeyboard() {
@@ -623,7 +1131,7 @@ class MainActivity : AppCompatActivity() {
                 binding.addressBar.gravity = android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START
                 binding.addressBar.hint = "Запрос или сайт"
                 if (onStart) {
-                    binding.root.setBackgroundResource(R.drawable.bg_start_wallpaper)
+                    updateWallpaperVisibility()
                 }
             }
             onStart -> {
@@ -643,7 +1151,7 @@ class MainActivity : AppCompatActivity() {
                 binding.addressBar.setText("")
                 binding.addressBar.hint = "Запрос или сайт"
                 binding.addressBar.gravity = android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START
-                binding.root.setBackgroundResource(R.drawable.bg_start_wallpaper)
+                updateWallpaperVisibility()
             }
             else -> {
                 // Страница: назад всегда активен (на старт / историю) · домен · ещё
@@ -663,6 +1171,7 @@ class MainActivity : AppCompatActivity() {
                 binding.addressBar.setText(UrlUtils.displayHost(active.url))
                 binding.addressBar.gravity = android.view.Gravity.CENTER
                 binding.root.setBackgroundColor(ContextCompat.getColor(this, R.color.safari_page_bg))
+                updateWallpaperVisibility()
             }
         }
     }
@@ -673,6 +1182,47 @@ class MainActivity : AppCompatActivity() {
         binding.suggestionsList.layoutManager = LinearLayoutManager(this)
         binding.historyList.layoutManager = LinearLayoutManager(this)
         binding.tabsList.layoutManager = GridLayoutManager(this, 2)
+        binding.tabsList.itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
+            addDuration = 120
+            removeDuration = 140
+            moveDuration = 140
+            changeDuration = 100
+        }
+        ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean = false
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val adapter = binding.favoritesList.adapter as? FavoriteAdapter ?: return
+                val bm = adapter.itemAt(viewHolder.bindingAdapterPosition) ?: return
+                lifecycleScope.launch {
+                    if (bookmarks.isEmpty()) {
+                        defaultFavorites.filterNot { it.url == bm.url }.forEach {
+                            repo.addBookmark(it.title, it.url)
+                        }
+                    } else {
+                        repo.removeBookmark(bm.url)
+                    }
+                    Toast.makeText(this@MainActivity, "Удалено из избранного", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }).attachToRecyclerView(binding.favoritesList)
+        ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean = false
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val adapter = binding.tabsList.adapter as? TabsAdapter ?: return
+                val id = adapter.tabIdAt(viewHolder.bindingAdapterPosition) ?: return
+                closeTab(id)
+            }
+        }).attachToRecyclerView(binding.tabsList)
         refreshStartPage()
         updateTabCount()
     }
@@ -681,13 +1231,13 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repo.observeBookmarks().collectLatest {
                 bookmarks = it
-                refreshStartPage()
+                if (binding.startPage.visibility == View.VISIBLE) refreshStartPage()
             }
         }
         lifecycleScope.launch {
             repo.observeHistory().collectLatest {
                 history = it.filter { h -> h.url != "about:blank" && h.url.isNotBlank() }
-                refreshStartPage()
+                if (binding.startPage.visibility == View.VISIBLE) refreshStartPage()
             }
         }
     }
@@ -736,16 +1286,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun editFavorite(bm: Bookmark) {
-        val input = android.widget.EditText(this).apply {
+        val input = EditText(this).apply {
             setText(bm.title)
             setSelection(text.length)
             hint = "Название"
-            setPadding(48, 32, 48, 32)
         }
-        AlertDialog.Builder(this)
-            .setTitle("Избранное")
-            .setView(input)
-            .setPositiveButton("Сохранить") { _, _ ->
+        GlassSheet.showInput(
+            this,
+            title = "Избранное",
+            input = input,
+            positive = "Сохранить",
+            onPositive = {
                 val name = input.text?.toString()?.trim().orEmpty()
                 lifecycleScope.launch {
                     if (bookmarks.isEmpty()) {
@@ -753,8 +1304,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     repo.renameBookmark(bm.url, name.ifBlank { bm.title })
                 }
-            }
-            .setNeutralButton("Удалить") { _, _ ->
+            },
+            neutral = "Удалить",
+            onNeutral = {
                 lifecycleScope.launch {
                     if (bookmarks.isEmpty()) {
                         defaultFavorites.filterNot { it.url == bm.url }.forEach {
@@ -764,9 +1316,9 @@ class MainActivity : AppCompatActivity() {
                         repo.removeBookmark(bm.url)
                     }
                 }
-            }
-            .setNegativeButton("Отмена", null)
-            .show()
+            },
+            negative = "Отмена"
+        )
     }
 
     private fun showSuggestions(items: List<Suggestion>) {
@@ -817,15 +1369,17 @@ class MainActivity : AppCompatActivity() {
         showWeb()
         hideTabs()
         refreshAddressDisplay()
-        lifecycleScope.launch {
-            repo.upsertTab(
-                ru.srr.safari.data.TabEntity(
-                    id = active.id,
-                    title = active.title,
-                    url = active.url,
-                    isPrivate = active.isPrivate
+        if (!isPrivate) {
+            lifecycleScope.launch {
+                repo.upsertTab(
+                    ru.srr.safari.data.TabEntity(
+                        id = active.id,
+                        title = active.title,
+                        url = active.url,
+                        isPrivate = false
+                    )
                 )
-            )
+            }
         }
     }
 
@@ -833,6 +1387,7 @@ class MainActivity : AppCompatActivity() {
         binding.startPage.visibility = View.GONE
         binding.webView.visibility = View.VISIBLE
         hideSuggestions()
+        updateWallpaperVisibility()
     }
 
     private fun showStartPage() {
@@ -848,18 +1403,37 @@ class MainActivity : AppCompatActivity() {
         setChromeCollapsed(false)
         refreshAddressDisplay()
         applyPrivateUi()
+        updateWallpaperVisibility()
     }
 
     private fun applyPrivateSettings() {
         binding.webView.settings.domStorageEnabled = !isPrivate
         binding.webView.settings.cacheMode =
             if (isPrivate) WebSettings.LOAD_NO_CACHE else WebSettings.LOAD_DEFAULT
-        CookieManager.getInstance().setAcceptCookie(!isPrivate)
+        val cookies = CookieManager.getInstance()
+        cookies.setAcceptCookie(!isPrivate)
+        cookies.setAcceptThirdPartyCookies(binding.webView, !isPrivate)
+        if (isPrivate) {
+            cookies.flush()
+        }
+    }
+
+    private fun clearPrivateBrowsingData() {
+        try {
+            binding.webView.clearCache(true)
+            binding.webView.clearFormData()
+            binding.webView.clearHistory()
+        } catch (_: Exception) {
+        }
+        lifecycleScope.launch { repo.clearPrivateTabs() }
     }
 
     private fun applyPrivateUi() {
         if (isPrivate) {
-            binding.root.setBackgroundColor(ContextCompat.getColor(this, R.color.safari_private_bg))
+            binding.wallpaperView.setImageDrawable(null)
+            binding.wallpaperView.setBackgroundColor(
+                ContextCompat.getColor(this, R.color.safari_private_bg)
+            )
             binding.startTitle.setTextColor(ContextCompat.getColor(this, R.color.safari_start_title))
             binding.startTitle.text = "Приватный доступ"
             binding.startSubtitle.visibility = View.VISIBLE
@@ -871,7 +1445,7 @@ class MainActivity : AppCompatActivity() {
             binding.recentHeaderRow.visibility = View.GONE
             binding.recentList.visibility = View.GONE
         } else {
-            binding.root.setBackgroundResource(R.drawable.bg_start_wallpaper)
+            applyWallpaper()
             binding.startTitle.setTextColor(ContextCompat.getColor(this, R.color.safari_start_title))
             binding.startTitle.text = "Избранное"
             binding.startSubtitle.visibility = View.GONE
@@ -881,6 +1455,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnTogglePrivate.text = if (isPrivate) "Обычный" else "Приватный"
         binding.tabsTitle.text = if (isPrivate) "Приватные вкладки" else "Вкладки"
         updateTabCount()
+        updateWallpaperVisibility()
     }
 
     private fun newTab(private: Boolean) {
@@ -888,23 +1463,32 @@ class MainActivity : AppCompatActivity() {
         tabs.add(tab)
         activeId = tab.id
         isPrivate = private
+        applyPrivateSettings()
         updateTabCount()
         hideTabs()
         showStartPage()
     }
 
     private fun closeTab(id: String) {
+        val inOverview = binding.tabsOverlay.visibility == View.VISIBLE
         tabs.removeAll { it.id == id }
         tabPreviews.remove(id)?.recycle()
         lifecycleScope.launch { repo.deleteTab(id) }
         val mode = tabs.filter { it.isPrivate == isPrivate }
         if (mode.isEmpty()) {
             newTab(isPrivate)
+            if (inOverview) {
+                renderTabs()
+                updateTabCount()
+            }
             return
         }
         if (activeId == id) activeId = mode.last().id
         updateTabCount()
-        renderTabs()
+        if (inOverview) {
+            renderTabs()
+            return
+        }
         selectTab(activeId)
     }
 
@@ -919,7 +1503,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun togglePrivate() {
+        val leavingPrivate = isPrivate
         isPrivate = !isPrivate
+        if (leavingPrivate) {
+            // Leaving private: wipe session leftovers and drop private tabs from memory/disk.
+            tabs.removeAll { it.isPrivate }
+            clearPrivateBrowsingData()
+        }
+        applyPrivateSettings()
         applyPrivateUi()
         val mode = tabs.filter { it.isPrivate == isPrivate }
         if (mode.isEmpty()) newTab(isPrivate)
@@ -934,29 +1525,68 @@ class MainActivity : AppCompatActivity() {
     private fun showTabs() {
         captureActiveTabPreview()
         renderTabs()
-        binding.tabsOverlay.visibility = View.VISIBLE
-        binding.bottomChrome.visibility = View.GONE
+        val overlay = binding.tabsOverlay
+        overlay.animate().cancel()
+        overlay.visibility = View.VISIBLE
+        SafariMotion.appear(overlay, fromScale = 0.985f, fromY = 12f * resources.displayMetrics.density)
+        binding.bottomChrome.animate().cancel()
+        binding.bottomChrome.animate()
+            .alpha(0f)
+            .translationY(24f * resources.displayMetrics.density)
+            .setDuration(SafariMotion.OVERLAY)
+            .setInterpolator(SafariMotion.softIn)
+            .withEndAction {
+                binding.bottomChrome.visibility = View.GONE
+                binding.bottomChrome.alpha = 1f
+                binding.bottomChrome.translationY = 0f
+            }
+            .start()
         updateTabCount()
     }
 
     private fun hideTabs() {
-        binding.tabsOverlay.visibility = View.GONE
+        val overlay = binding.tabsOverlay
+        if (overlay.visibility != View.VISIBLE) {
+            binding.bottomChrome.visibility = View.VISIBLE
+            SafariMotion.reset(binding.bottomChrome)
+            return
+        }
+        overlay.animate().cancel()
+        SafariMotion.disappear(
+            overlay,
+            toScale = 0.985f,
+            toY = 10f * resources.displayMetrics.density
+        ) {
+            overlay.visibility = View.GONE
+            SafariMotion.reset(overlay)
+        }
+        binding.bottomChrome.animate().cancel()
         binding.bottomChrome.visibility = View.VISIBLE
+        binding.bottomChrome.alpha = 0f
+        binding.bottomChrome.translationY = 16f * resources.displayMetrics.density
+        binding.bottomChrome.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setDuration(SafariMotion.OVERLAY)
+            .setInterpolator(SafariMotion.softOut)
+            .start()
     }
 
     private fun captureActiveTabPreview() {
         val wv = binding.webView
-        if (active.isStartPage || wv.width < 2 || wv.height < 2) {
+        if (active.isStartPage || wv.visibility != View.VISIBLE || wv.width < 2 || wv.height < 2) {
             tabPreviews.remove(activeId)
             return
         }
         try {
-            val full = Bitmap.createBitmap(wv.width, wv.height, Bitmap.Config.ARGB_8888)
-            wv.draw(Canvas(full))
-            val w = 360
-            val h = (360f * full.height / full.width).toInt().coerceIn(200, 640)
-            val scaled = Bitmap.createScaledBitmap(full, w, h, true)
-            if (scaled !== full) full.recycle()
+            val targetW = 360
+            val targetH = (360f * wv.height / wv.width).toInt().coerceIn(200, 640)
+            val scaled = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.RGB_565)
+            val canvas = Canvas(scaled)
+            val scaleX = targetW.toFloat() / wv.width
+            val scaleY = targetH.toFloat() / wv.height
+            canvas.scale(scaleX, scaleY)
+            wv.draw(canvas)
             tabPreviews[activeId]?.recycle()
             tabPreviews[activeId] = scaled
         } catch (_: Exception) {
@@ -989,14 +1619,59 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showBookmarks() {
-        val source = if (bookmarks.isNotEmpty()) bookmarks else defaultFavorites
-        val titles = source.map { it.title.ifBlank { it.url } }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Избранное")
-            .setItems(titles) { _, which -> loadUrl(source[which].url) }
-            .setNeutralButton("История") { _, _ -> showHistory() }
-            .setNegativeButton("Закрыть", null)
-            .show()
+        val source = (if (bookmarks.isNotEmpty()) bookmarks else defaultFavorites).toMutableList()
+        val dialog = android.app.Dialog(this, R.style.Theme_Safari_GlassDialog)
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
+        )
+        val sheet = ru.srr.safari.databinding.DialogBookmarksBinding.inflate(layoutInflater)
+        sheet.bookmarksCard.background = LiquidGlass.popoverDrawable(this, settings.glassOpacity)
+        LiquidGlass.polishCapsule(sheet.bookmarksCard, 26f)
+        sheet.bookmarksList.layoutManager = LinearLayoutManager(this)
+        lateinit var adapter: BookmarkListAdapter
+        fun deleteAt(pos: Int) {
+            if (pos !in source.indices) return
+            val bm = source.removeAt(pos)
+            adapter.notifyItemRemoved(pos)
+            lifecycleScope.launch {
+                if (bookmarks.isEmpty()) {
+                    source.forEach { repo.addBookmark(it.title, it.url) }
+                } else {
+                    repo.removeBookmark(bm.url)
+                }
+                Toast.makeText(this@MainActivity, "Удалено", Toast.LENGTH_SHORT).show()
+            }
+        }
+        adapter = BookmarkListAdapter(source, onClick = {
+            dialog.dismiss()
+            loadUrl(it.url)
+        })
+        sheet.bookmarksList.adapter = adapter
+        ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean = false
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                deleteAt(viewHolder.bindingAdapterPosition)
+            }
+        }).attachToRecyclerView(sheet.bookmarksList)
+        sheet.bookmarksHistory.setOnClickListener {
+            dialog.dismiss()
+            showHistory()
+        }
+        sheet.bookmarksClose.setOnClickListener { dialog.dismiss() }
+        dialog.setContentView(sheet.root)
+        dialog.show()
+        dialog.window?.setLayout(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        SafariMotion.appear(sheet.bookmarksCard, fromScale = 0.94f)
     }
 
     private fun showHistory() {
@@ -1008,14 +1683,27 @@ class MainActivity : AppCompatActivity() {
             return
         }
         renderHistoryList(items)
-        binding.historyOverlay.visibility = View.VISIBLE
+        val overlay = binding.historyOverlay
+        overlay.animate().cancel()
+        overlay.visibility = View.VISIBLE
+        SafariMotion.appear(overlay, fromScale = 0.99f, fromY = 16f * resources.displayMetrics.density)
         binding.bottomChrome.visibility = View.GONE
     }
 
     private fun hideHistory() {
-        binding.historyOverlay.visibility = View.GONE
+        val overlay = binding.historyOverlay
+        if (overlay.visibility != View.VISIBLE) return
+        SafariMotion.disappear(
+            overlay,
+            toScale = 0.99f,
+            toY = 12f * resources.displayMetrics.density
+        ) {
+            overlay.visibility = View.GONE
+            SafariMotion.reset(overlay)
+        }
         if (binding.tabsOverlay.visibility != View.VISIBLE) {
             binding.bottomChrome.visibility = View.VISIBLE
+            SafariMotion.reset(binding.bottomChrome)
         }
     }
 
@@ -1095,48 +1783,207 @@ class MainActivity : AppCompatActivity() {
 
     private fun showShareMenu() {
         val url = active.url.takeIf { it.isNotBlank() && it != "about:blank" }.orEmpty()
-        val title = active.title
-        val items = arrayOf(
-            "Поделиться…",
-            "Скопировать",
-            "Добавить в избранное",
-            "Режим чтения",
-            "Перевести на русский",
-            "Translate to English",
-            "История"
+        val title = active.title.ifBlank { if (active.isStartPage) "Safari" else "Страница" }
+        val host = if (url.isBlank()) "safari" else UrlUtils.displayHost(url)
+        val sheet = com.google.android.material.bottomsheet.BottomSheetDialog(this, R.style.Theme_Safari_BottomSheet)
+        val b = ru.srr.safari.databinding.DialogShareSheetBinding.inflate(layoutInflater)
+        b.shareCard.background = LiquidGlass.popoverDrawable(this, settings.glassOpacity)
+        LiquidGlass.polishCapsule(b.shareCard, 28f)
+        b.shareTitle.text = title
+        b.shareHost.text = host
+        b.shareFavicon.text = host.firstOrNull()?.uppercaseChar()?.toString() ?: "S"
+        b.shareClose.setOnClickListener { sheet.dismiss() }
+
+        fun expandExtras() {
+            b.shareExtras.visibility = View.VISIBLE
+            sheet.behavior.state = com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED
+        }
+        b.shareOptions.setOnClickListener { expandExtras() }
+
+        fun shareText() {
+            if (url.isBlank()) return
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, "$title\n$url")
+                putExtra(Intent.EXTRA_SUBJECT, title)
+            }
+            startActivity(Intent.createChooser(send, "Поделиться"))
+        }
+        fun shareToPackage(pkg: String) {
+            if (url.isBlank()) return
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, "$title\n$url")
+                setPackage(pkg)
+            }
+            try {
+                startActivity(send)
+            } catch (_: Exception) {
+                shareText()
+            }
+        }
+        fun copyUrl() {
+            if (url.isBlank()) return
+            val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("url", url))
+            Toast.makeText(this, "Скопировано", Toast.LENGTH_SHORT).show()
+        }
+        fun addBookmark() {
+            if (url.isBlank()) return
+            lifecycleScope.launch {
+                repo.addBookmark(title, url)
+                Toast.makeText(this@MainActivity, "В закладках", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        data class AppItem(val label: String, val icon: Int, val click: () -> Unit)
+        val apps = listOf(
+            AppItem("Telegram", R.drawable.ic_menu_share) {
+                sheet.dismiss()
+                shareToPackage("org.telegram.messenger")
+            },
+            AppItem("Сообщения", R.drawable.ic_share_message) {
+                sheet.dismiss()
+                if (url.isBlank()) return@AppItem
+                try {
+                    startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:")).apply {
+                        putExtra("sms_body", "$title\n$url")
+                    })
+                } catch (_: Exception) {
+                    shareText()
+                }
+            },
+            AppItem("Заметки", R.drawable.ic_share_notes) {
+                sheet.dismiss()
+                shareText()
+            },
+            AppItem("Напоминания", R.drawable.ic_share_reminder) {
+                sheet.dismiss()
+                if (url.isBlank()) return@AppItem
+                try {
+                    startActivity(
+                        Intent(Intent.ACTION_INSERT).apply {
+                            data = android.provider.CalendarContract.Events.CONTENT_URI
+                            putExtra(android.provider.CalendarContract.Events.TITLE, title)
+                            putExtra(android.provider.CalendarContract.Events.DESCRIPTION, url)
+                        }
+                    )
+                } catch (_: Exception) {
+                    shareText()
+                }
+            },
+            AppItem("Ещё", R.drawable.ic_more) {
+                sheet.dismiss()
+                shareText()
+            }
         )
-        AlertDialog.Builder(this)
-            .setTitle(if (active.isStartPage) "Safari" else title)
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> {
-                        if (url.isBlank()) return@setItems
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, "$title\n$url")
-                        }
-                        startActivity(Intent.createChooser(send, "Поделиться"))
-                    }
-                    1 -> {
-                        if (url.isBlank()) return@setItems
-                        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("url", url))
-                        Toast.makeText(this, "Скопировано", Toast.LENGTH_SHORT).show()
-                    }
-                    2 -> {
-                        if (url.isBlank()) return@setItems
-                        lifecycleScope.launch {
-                            repo.addBookmark(title, url)
-                            Toast.makeText(this@MainActivity, "В избранном", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    3 -> openReader()
-                    4 -> translate("ru")
-                    5 -> translate("en")
-                    6 -> showHistory()
+        apps.forEach { item ->
+            val row = ru.srr.safari.databinding.ItemShareAppBinding.inflate(layoutInflater, b.shareAppsRow, false)
+            row.shareAppLabel.text = item.label
+            row.shareAppIcon.setImageResource(item.icon)
+            row.root.setOnClickListener { item.click() }
+            b.shareAppsRow.addView(row.root)
+        }
+
+        val actions = listOf(
+            AppItem("Скопировать", R.drawable.ic_menu_copy) {
+                copyUrl()
+                sheet.dismiss()
+            },
+            AppItem("Добавить в: Закладки", R.drawable.ic_menu_bookmark) {
+                addBookmark()
+                sheet.dismiss()
+            }
+        )
+        actions.forEach { item ->
+            val row = ru.srr.safari.databinding.ItemShareActionBinding.inflate(layoutInflater, b.shareActionsRow, false)
+            row.shareActionLabel.text = item.label
+            row.shareActionIcon.setImageResource(item.icon)
+            row.root.setOnClickListener { item.click() }
+            b.shareActionsRow.addView(row.root)
+        }
+
+        fun addExtra(label: String, icon: Int, block: () -> Unit) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(
+                    (14 * resources.displayMetrics.density).toInt(),
+                    0,
+                    (12 * resources.displayMetrics.density).toInt(),
+                    0
+                )
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    (44 * resources.displayMetrics.density).toInt()
+                )
+                setBackgroundResource(
+                    android.util.TypedValue().also {
+                        theme.resolveAttribute(android.R.attr.selectableItemBackground, it, true)
+                    }.resourceId
+                )
+                setOnClickListener {
+                    sheet.dismiss()
+                    block()
                 }
             }
-            .show()
+            val iv = android.widget.ImageView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    (18 * resources.displayMetrics.density).toInt(),
+                    (18 * resources.displayMetrics.density).toInt()
+                )
+                setImageResource(icon)
+            }
+            val tv = TextView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = (10 * resources.displayMetrics.density).toInt()
+                }
+                text = label
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.safari_text))
+                textSize = 15f
+            }
+            row.addView(iv)
+            row.addView(tv)
+            b.shareExtraList.addView(row)
+        }
+        addExtra("Добавить закладку в папку…", R.drawable.ic_menu_book) { addBookmark() }
+        addExtra("Добавить в Избранное", R.drawable.ic_menu_star) { addBookmark() }
+        addExtra("Найти на странице", R.drawable.ic_menu_find) { showFindInPage() }
+        addExtra("Режим чтения", R.drawable.ic_menu_reader) { openReader() }
+        addExtra("Перевести на русский", R.drawable.ic_menu_translate) { translate("ru") }
+        addExtra("Translate to English", R.drawable.ic_menu_translate) { translate("en") }
+        addExtra("История", R.drawable.ic_menu_book) { showHistory() }
+
+        sheet.setContentView(b.root)
+        sheet.setOnShowListener {
+            val parent = b.root.parent as? View
+            parent?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            val behavior = sheet.behavior
+            behavior.skipCollapsed = false
+            behavior.isFitToContents = true
+            behavior.isDraggable = true
+            b.root.post {
+                val peek = b.shareCard.height.coerceAtMost(
+                    (resources.displayMetrics.heightPixels * 0.48f).toInt()
+                ).coerceAtLeast((280 * resources.displayMetrics.density).toInt())
+                behavior.peekHeight = peek
+                behavior.state = com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_COLLAPSED
+            }
+            behavior.addBottomSheetCallback(object :
+                com.google.android.material.bottomsheet.BottomSheetBehavior.BottomSheetCallback() {
+                override fun onStateChanged(bottomSheet: View, newState: Int) {
+                    if (newState == com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED) {
+                        b.shareExtras.visibility = View.VISIBLE
+                    }
+                }
+
+                override fun onSlide(bottomSheet: View, slideOffset: Float) {
+                    if (slideOffset > 0.15f) b.shareExtras.visibility = View.VISIBLE
+                }
+            })
+        }
+        sheet.show()
+        SafariMotion.appear(b.shareCard, fromScale = 0.96f, fromY = 24f * resources.displayMetrics.density)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -1266,6 +2113,27 @@ class MainActivity : AppCompatActivity() {
         imm.hideSoftInputFromWindow(binding.addressBar.windowToken, 0)
     }
 
+    private class BookmarkListAdapter(
+        private val items: List<Bookmark>,
+        private val onClick: (Bookmark) -> Unit
+    ) : RecyclerView.Adapter<BookmarkListAdapter.VH>() {
+        class VH(val b: ru.srr.safari.databinding.ItemBookmarkRowBinding) : RecyclerView.ViewHolder(b.root)
+
+        override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): VH {
+            val b = ru.srr.safari.databinding.ItemBookmarkRowBinding.inflate(
+                android.view.LayoutInflater.from(parent.context), parent, false
+            )
+            return VH(b)
+        }
+
+        override fun getItemCount() = items.size
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val item = items[position]
+            holder.b.bookmarkTitle.text = item.title.ifBlank { UrlUtils.displayHost(item.url) }
+            holder.b.root.setOnClickListener { onClick(item) }
+        }
+    }
+
     private class FavoriteAdapter(
         private val items: List<Bookmark>,
         private val editing: Boolean,
@@ -1274,8 +2142,16 @@ class MainActivity : AppCompatActivity() {
     ) : RecyclerView.Adapter<FavoriteAdapter.VH>() {
         class VH(val b: ItemFavoriteBinding) : RecyclerView.ViewHolder(b.root)
 
+        fun itemAt(position: Int): Bookmark? = items.getOrNull(position)
+
         override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): VH {
             val b = ItemFavoriteBinding.inflate(android.view.LayoutInflater.from(parent.context), parent, false)
+            b.favTile.background = LiquidGlass.capsuleDrawable(
+                parent.context,
+                BrowserSettings(parent.context).glassOpacity,
+                16f
+            )
+            LiquidGlass.polishCapsule(b.favTile, 16f)
             return VH(b)
         }
 
@@ -1303,17 +2179,16 @@ class MainActivity : AppCompatActivity() {
                 item.url.contains("wikipedia") -> 0xFF000000.toInt()
                 else -> colors[position % colors.size]
             }
-            val tile = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                cornerRadius = 18f * density
-                setColor(0xF5FFFFFF.toInt())
-            }
             val badge = android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.RECTANGLE
                 cornerRadius = 14f * density
                 setColor(brand)
             }
-            holder.b.favTile.background = tile
+            holder.b.favTile.background = LiquidGlass.capsuleDrawable(
+                holder.itemView.context,
+                BrowserSettings(holder.itemView.context).glassOpacity,
+                16f
+            )
             holder.b.favLetter.background = badge
             val pad = (5 * density).toInt()
             holder.b.favLetter.setPadding(pad, pad, pad, pad)
@@ -1435,16 +2310,16 @@ class MainActivity : AppCompatActivity() {
     ) : RecyclerView.Adapter<TabsAdapter.VH>() {
         class VH(val b: ItemTabBinding) : RecyclerView.ViewHolder(b.root)
 
+        fun tabIdAt(position: Int): String? = items.getOrNull(position)?.id
+
         override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): VH {
             val b = ItemTabBinding.inflate(android.view.LayoutInflater.from(parent.context), parent, false)
+            val opacity = BrowserSettings(parent.context).glassOpacity
             val card = b.tabPreview.parent as? View
-            card?.outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    val r = 22f * view.resources.displayMetrics.density
-                    outline.setRoundRect(0, 0, view.width, view.height, r)
-                }
-            }
-            card?.clipToOutline = true
+            card?.background = LiquidGlass.capsuleDrawable(parent.context, opacity, 22f)
+            card?.let { LiquidGlass.polishCapsule(it, 22f) }
+            b.tabCardClose.background = LiquidGlass.circleDrawable(parent.context, opacity)
+            LiquidGlass.polishCircle(b.tabCardClose)
             return VH(b)
         }
 
@@ -1459,15 +2334,21 @@ class MainActivity : AppCompatActivity() {
             holder.b.tabCardTitle.text = title
             val letter = title.firstOrNull()?.uppercaseChar()?.toString() ?: "S"
             holder.b.tabFavicon.text = letter
+            val opacity = BrowserSettings(holder.itemView.context).glassOpacity
+            (holder.b.tabPreview.parent as? View)?.background =
+                LiquidGlass.capsuleDrawable(holder.itemView.context, opacity, 22f)
+            holder.b.tabCardClose.background =
+                LiquidGlass.circleDrawable(holder.itemView.context, opacity)
 
             val preview = previews[tab.id]
             if (preview != null && !preview.isRecycled) {
                 holder.b.tabPreview.setImageBitmap(preview)
+                holder.b.tabPreview.setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 holder.b.tabPreview.visibility = View.VISIBLE
                 holder.b.tabPlaceholder.visibility = View.GONE
             } else {
                 holder.b.tabPreview.setImageDrawable(null)
-                holder.b.tabPreview.setBackgroundColor(0xFFEEF0F3.toInt())
+                holder.b.tabPreview.setBackgroundResource(R.color.safari_glass_preview)
                 holder.b.tabPlaceholder.visibility = View.VISIBLE
             }
             holder.b.root.setOnClickListener { onSelect(tab.id) }

@@ -1,10 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <gradient
-        android:angle="160"
-        android:startColor="#D8DEE8"
-        android:centerColor="#C9D0DC"
-        android:endColor="#B8C0CE"
-        android:type="linear" />
-</shape>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="160"
+                android:centerColor="@color/safari_glass_backdrop_mid"
+                android:endColor="@color/safari_glass_backdrop_end"
+                android:startColor="@color/safari_glass_backdrop_start"
+                android:type="linear" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:endColor="#00FFFFFF"
+                android:startColor="@color/safari_glass_specular" />
+        </shape>
+    </item>
+</layer-list>

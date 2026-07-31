@@ -10,7 +10,7 @@
     <color name="safari_icon">#F2F2F7</color>
     <color name="safari_overlay">#1C1C1E</color>
     <color name="safari_group">#2C2C2E</color>
-    <color name="safari_popover">#F22C2C2E</color>
+    <color name="safari_popover">#2C2C2E</color>
     <color name="safari_divider">#33FFFFFF</color>
     <color name="safari_menu_hairline">#26FFFFFF</color>
     <color name="safari_menu_section">#33FFFFFF</color>
@@ -20,8 +20,19 @@
     <color name="safari_white">#FFFFFF</color>
     <color name="safari_start_title">#FFFFFF</color>
     <color name="safari_start_muted">#CCFFFFFF</color>
-    <color name="safari_glass_fill">#E62C2C2E</color>
-    <color name="safari_glass_stroke">#44FFFFFF</color>
-    <color name="safari_circle_fill">#E02C2C2E</color>
-    <color name="safari_chrome_scrim">#CC1C1C1E</color>
+    <color name="safari_glass_fill">#2C2C2E</color>
+    <color name="safari_glass_stroke">#55FFFFFF</color>
+    <color name="safari_glass_specular">#33FFFFFF</color>
+    <color name="safari_circle_fill">#2C2C2E</color>
+    <color name="safari_chrome_scrim">#E61C1C1E</color>
+    <color name="safari_chrome_scrim_mid">#991C1C1E</color>
+    <color name="safari_chrome_scrim_top">#001C1C1E</color>
+    <color name="safari_glass_backdrop_start">#1C1C1E</color>
+    <color name="safari_glass_backdrop_mid">#141416</color>
+    <color name="safari_glass_backdrop_end">#0C0C0E</color>
+    <color name="safari_glass_card">#2C2C2E</color>
+    <color name="safari_glass_preview">#2C2C2E</color>
+    <color name="safari_glass_close">#AA000000</color>
+    <color name="safari_blue_glass">#0A84FF</color>
+    <color name="safari_overlay_glass">#1C1C1E</color>
 </resources>

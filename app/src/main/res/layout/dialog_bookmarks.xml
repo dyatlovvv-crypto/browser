@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Compact bookmarks list with swipe-to-delete -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingHorizontal="16dp"
+    android:paddingVertical="20dp">
+
+    <LinearLayout
+        android:id="@+id/bookmarksCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_ios_popover"
+        android:orientation="vertical"
+        android:paddingTop="10dp"
+        android:paddingBottom="6dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:paddingBottom="6dp"
+            android:text="Закладки"
+            android:textColor="@color/safari_muted"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/bookmarksList"
+            android:layout_width="match_parent"
+        android:overScrollMode="never"
+        android:paddingBottom="4dp" />
+
+        <TextView
+            android:id="@+id/bookmarksHistory"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="История"
+            android:textColor="@color/safari_blue"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/bookmarksClose"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="Закрыть"
+            android:textColor="@color/safari_muted"
+            android:textSize="16sp" />
+    </LinearLayout>
+</FrameLayout>

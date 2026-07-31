@@ -14,8 +14,7 @@
             android:id="@+id/favTile"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="@drawable/bg_fav_tile"
-            android:elevation="3dp">
+            android:background="@drawable/bg_fav_tile">
 
             <TextView
                 android:id="@+id/favLetter"
@@ -33,7 +32,6 @@
             android:layout_height="22dp"
             android:layout_gravity="top|start"
             android:background="@drawable/bg_fav_delete"
-            android:elevation="6dp"
             android:gravity="center"
             android:text="−"
             android:textColor="#FFFFFF"

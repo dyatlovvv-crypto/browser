@@ -56,9 +56,20 @@ class BrowserRepository(context: Context) {
     suspend fun addHistory(title: String, url: String) = mutex.withLock {
         withContext(Dispatchers.IO) {
             if (url.isBlank() || url == "about:blank" || url.startsWith("chrome://") || url.startsWith("data:")) return@withContext
-            val nextId = (history.value.maxOfOrNull { it.id } ?: 0L) + 1L
+            val existing = history.value
+            // Same URL already on top — skip disk rewrite
+            if (existing.isNotEmpty() && existing.first().url == url) {
+                if (existing.first().title != title.ifBlank { url }) {
+                    val updated = existing.toMutableList()
+                    updated[0] = existing.first().copy(title = title.ifBlank { url }, visitedAt = System.currentTimeMillis())
+                    history.value = updated
+                    saveHistory(updated)
+                }
+                return@withContext
+            }
+            val nextId = (existing.maxOfOrNull { it.id } ?: 0L) + 1L
             val entry = HistoryEntry(id = nextId, title = title.ifBlank { url }, url = url)
-            val list = (listOf(entry) + history.value.filterNot { it.url == url }).take(500)
+            val list = (listOf(entry) + existing.filterNot { it.url == url }).take(500)
             history.value = list
             saveHistory(list)
         }
@@ -102,6 +113,9 @@ class BrowserRepository(context: Context) {
             saveTabs(list)
         }
     }
+
+    /** Non-private tabs for cold-start restore. */
+    fun snapshotNormalTabs(): List<TabEntity> = tabs.value.filterNot { it.isPrivate }
 
     private fun loadBookmarks(): List<Bookmark> {
         if (!bookmarksFile.exists()) {

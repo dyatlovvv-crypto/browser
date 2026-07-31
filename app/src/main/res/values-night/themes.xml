@@ -11,4 +11,30 @@
         <item name="android:colorBackground">@color/safari_bg</item>
         <item name="colorOnSurface">@color/safari_text</item>
     </style>
+
+    <style name="Theme.Safari.GlassDialog" parent="Theme.MaterialComponents.DayNight.Dialog">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.5</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="colorPrimary">@color/safari_blue</item>
+        <item name="colorOnSurface">@color/safari_text</item>
+    </style>
+
+    <style name="Theme.Safari.BottomSheet" parent="Theme.MaterialComponents.DayNight.BottomSheetDialog">
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="bottomSheetStyle">@style/Widget.Safari.BottomSheet</item>
+        <item name="android:backgroundDimAmount">0.55</item>
+        <item name="colorPrimary">@color/safari_blue</item>
+        <item name="colorOnSurface">@color/safari_text</item>
+    </style>
+
+    <style name="Widget.Safari.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="backgroundTint">@android:color/transparent</item>
+        <item name="shapeAppearance">@null</item>
+        <item name="android:elevation">0dp</item>
+    </style>
 </resources>

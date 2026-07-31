@@ -10,13 +10,13 @@
         android:layout_width="match_parent"
         android:layout_height="210dp"
         android:background="@drawable/bg_tab_card"
-        android:elevation="3dp">
+        android:elevation="0dp">
 
         <ImageView
             android:id="@+id/tabPreview"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="#EEF0F3"
+            android:background="@color/safari_glass_preview"
             android:contentDescription="@null"
             android:scaleType="centerCrop" />
 
