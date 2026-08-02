@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="18dp"
+    android:height="18dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@color/safari_icon"
+        android:pathData="M5,7.2m-1.05,0a1.05,1.05 0,1 1,2.1 0a1.05,1.05 0,1 1,-2.1 0" />
+    <path
+        android:fillColor="@color/safari_icon"
+        android:pathData="M5,12m-1.05,0a1.05,1.05 0,1 1,2.1 0a1.05,1.05 0,1 1,-2.1 0" />
+    <path
+        android:fillColor="@color/safari_icon"
+        android:pathData="M5,16.8m-1.05,0a1.05,1.05 0,1 1,2.1 0a1.05,1.05 0,1 1,-2.1 0" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9,7.2 H19"
+        android:strokeWidth="1.5"
+        android:strokeColor="@color/safari_icon"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9,12 H19"
+        android:strokeWidth="1.5"
+        android:strokeColor="@color/safari_icon"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9,16.8 H19"
+        android:strokeWidth="1.5"
+        android:strokeColor="@color/safari_icon"
+        android:strokeLineCap="round" />
+</vector>

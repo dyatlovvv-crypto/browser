@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -63,6 +64,7 @@ import ru.srr.safari.data.BrowserSettings
 import ru.srr.safari.data.HistoryEntry
 import ru.srr.safari.databinding.ActivityMainBinding
 import ru.srr.safari.databinding.DialogSafariMoreBinding
+import ru.srr.safari.databinding.DialogTabsMenuBinding
 import ru.srr.safari.databinding.ItemFavoriteBinding
 import ru.srr.safari.databinding.ItemHistoryBinding
 import ru.srr.safari.databinding.ItemHistorySectionBinding
@@ -77,9 +79,13 @@ import ru.srr.safari.engine.ReaderModeScript
 import ru.srr.safari.engine.Suggestion
 import ru.srr.safari.engine.SuggestionProvider
 import ru.srr.safari.engine.UrlUtils
+import ru.srr.safari.ui.AddressTabSwipe
+import ru.srr.safari.ui.EdgeBackGesture
 import ru.srr.safari.ui.GlassSheet
 import ru.srr.safari.ui.LiquidGlass
 import ru.srr.safari.ui.SafariMotion
+import ru.srr.safari.ui.TabsModeLiquidSwitch
+import androidx.dynamicanimation.animation.SpringForce
 import java.io.File
 import java.util.Calendar
 import java.util.UUID
@@ -117,6 +123,9 @@ class MainActivity : AppCompatActivity() {
     private val historySectionExpanded = mutableMapOf<String, Boolean>()
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var tabsRestored = false
+    private var edgeBack: EdgeBackGesture? = null
+    private var addressTabSwipe: AddressTabSwipe? = null
+    private var tabsModeLiquid: TabsModeLiquidSwitch? = null
 
     private val SCROLL_BOOT_JS = """
             (function(){
@@ -201,27 +210,57 @@ class MainActivity : AppCompatActivity() {
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-            // Контент и оверлеи не залезают под статусбар / вырез
+            val imeBottom = ime.bottom
+            val navBottom = bars.bottom
+
             binding.contentContainer.updatePadding(top = bars.top)
-            binding.historyOverlay.getChildAt(0)?.updatePadding(top = bars.top + (12 * resources.displayMetrics.density).toInt())
+            binding.historyOverlay.getChildAt(0)?.updatePadding(
+                top = bars.top + (12 * resources.displayMetrics.density).toInt()
+            )
             binding.tabsList.updatePadding(
-                top = bars.top + (12 * resources.displayMetrics.density).toInt(),
+                top = bars.top + (56 * resources.displayMetrics.density).toInt(),
                 bottom = binding.tabsList.paddingBottom
             )
-            binding.readerOverlay.updatePadding(top = bars.top, bottom = bars.bottom)
-            val bottom = maxOf(bars.bottom, ime.bottom)
-            binding.bottomChrome.updatePadding(bottom = bottom)
-            binding.tabsBottomBar.updatePadding(bottom = bars.bottom)
-            val keyboardOpen = ime.bottom > 0
+            (binding.btnTabsMenu.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let { lp ->
+                val top = bars.top + (8 * resources.displayMetrics.density).toInt()
+                if (lp.topMargin != top) {
+                    lp.topMargin = top
+                    binding.btnTabsMenu.layoutParams = lp
+                }
+            }
+            binding.tabsPrivateEmpty.updatePadding(
+                top = bars.top + (100 * resources.displayMetrics.density).toInt()
+            )
+            binding.readerOverlay.updatePadding(top = bars.top, bottom = navBottom)
+
+            binding.bottomChrome.updatePadding(bottom = maxOf(navBottom, imeBottom))
+            // Tab bar stays compact: nav inset is margin under the pill, not padding inside it
+            // (padding blew up the glass capsule into an empty white slab).
+            binding.tabsBottomBar.updatePadding(bottom = 0)
+            (binding.tabsBottomBar.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let { lp ->
+                val bottom = navBottom + (10 * resources.displayMetrics.density).toInt()
+                if (lp.bottomMargin != bottom) {
+                    lp.bottomMargin = bottom
+                    binding.tabsBottomBar.layoutParams = lp
+                }
+            }
+
+            val keyboardOpen = imeBottom > 0
             if (keyboardOpen != imeVisible) {
                 imeVisible = keyboardOpen
                 if (keyboardOpen) {
-                    expandChromeNow()
+                    // Keyboard up: keep chrome pinned, no mid-collapse leftovers
+                    chromeCollapsed = false
+                    binding.bottomChrome.animate().cancel()
+                    binding.bottomChrome.translationY = 0f
+                    binding.bottomChrome.alpha = 1f
+                    binding.bottomChrome.visibility = View.VISIBLE
                 }
-                updateChromeForState()
-            } else if (keyboardOpen) {
-                binding.bottomChrome.translationY = 0f
             }
+
+            // WebView ignores View padding — shrink via bottomMargin so sticky page
+            // inputs (Google "Ask a question") sit above the address bar.
+            binding.bottomChrome.post { syncContentAboveChrome() }
             insets
         }
         ViewCompat.requestApplyInsets(binding.root)
@@ -535,6 +574,40 @@ class MainActivity : AppCompatActivity() {
         binding.bottomChrome.translationY = 0f
         binding.bottomChrome.visibility = View.VISIBLE
         binding.bottomChrome.alpha = 1f
+        syncContentAboveChrome()
+    }
+
+    /**
+     * Page must end above the chrome. WebView does not honor padding for fixed
+     * HTML elements, so we use bottomMargin on the content container.
+     */
+    private fun syncContentAboveChrome() {
+        val chrome = binding.bottomChrome
+        val overlayOpen =
+            binding.tabsOverlay.visibility == View.VISIBLE ||
+                binding.historyOverlay.visibility == View.VISIBLE
+        val reserve = when {
+            // Full-bleed overlays must reach the real screen bottom — never leave
+            // a white slab where the address bar used to sit.
+            overlayOpen -> 0
+            imeVisible -> chrome.height
+            chromeCollapsed -> 0
+            chrome.visibility != View.VISIBLE -> 0
+            else -> chrome.height
+        }
+        val lp = binding.contentContainer.layoutParams as androidx.constraintlayout.widget.ConstraintLayout.LayoutParams
+        if (lp.bottomMargin != reserve) {
+            lp.bottomMargin = reserve
+            binding.contentContainer.layoutParams = lp
+        }
+        val startPad = if (reserve > 0) {
+            (16 * resources.displayMetrics.density).toInt()
+        } else {
+            (130 * resources.displayMetrics.density).toInt()
+        }
+        if (binding.startPage.paddingBottom != startPad) {
+            binding.startPage.updatePadding(bottom = startPad)
+        }
     }
 
     private fun setChromeCollapsed(collapsed: Boolean) {
@@ -551,6 +624,7 @@ class MainActivity : AppCompatActivity() {
             val h = chrome.height.toFloat().coerceAtLeast(1f)
             if (collapsed) {
                 hideSuggestions()
+                syncContentAboveChrome()
                 chrome.animate()
                     .translationY(h)
                     .alpha(0.92f)
@@ -559,6 +633,7 @@ class MainActivity : AppCompatActivity() {
                     .start()
             } else {
                 chrome.visibility = View.VISIBLE
+                syncContentAboveChrome()
                 chrome.animate()
                     .translationY(0f)
                     .alpha(1f)
@@ -571,23 +646,47 @@ class MainActivity : AppCompatActivity() {
 
     private fun hideSuggestions() {
         suggestJob?.cancel()
-        binding.suggestionsList.visibility = View.GONE
+        val list = binding.suggestionsList
+        if (list.visibility != View.VISIBLE) return
+        SafariMotion.disappear(list, toScale = 1f, toY = 6f * resources.displayMetrics.density, duration = 120L) {
+            list.visibility = View.GONE
+            list.adapter = null
+            SafariMotion.reset(list)
+        }
+    }
+
+    /** Opaque sheet over the page while editing the address — Safari-like, hides site chrome. */
+    private fun showSearchCover() {
+        val list = binding.suggestionsList
+        val wasHidden = list.visibility != View.VISIBLE
+        list.visibility = View.VISIBLE
+        if (list.adapter == null) {
+            list.adapter = SuggestionAdapter(emptyList()) {}
+        }
+        if (wasHidden) {
+            SafariMotion.appear(list, fromScale = 1f, fromY = 10f * resources.displayMetrics.density, duration = 130L)
+        }
     }
 
     private fun setupChrome() {
         LiquidGlass.polishChrome(binding.bottomChrome)
-        LiquidGlass.polishCapsule(binding.addressCapsule)
+        // No press OnTouchListener here — AddressTabSwipe owns capsule touches
+        LiquidGlass.polishCapsule(binding.addressCapsule, pressFeedback = false)
         LiquidGlass.polishCircle(binding.btnBack)
         LiquidGlass.polishCircle(binding.btnMore)
         LiquidGlass.polishSheet(binding.tabsOverlay)
         LiquidGlass.polishSheet(binding.historyOverlay)
-        LiquidGlass.polishCapsule(binding.tabsBottomBar, 28f)
-        LiquidGlass.polishCapsule(binding.tabsCountPill, 20f)
         LiquidGlass.polishCircle(binding.btnNewTab)
         LiquidGlass.polishCircle(binding.btnTabsDone)
+        LiquidGlass.polishCircle(binding.btnTabsMenu)
+        setupTabsModeSwipe()
+        setupAddressTabSwipe()
+        setupEdgeBackGesture()
+        refreshTabsModeChrome()
         LiquidGlass.polishCapsule(binding.historyToolbar, 22f)
         LiquidGlass.polishSheet(binding.suggestionsList)
         LiquidGlass.polishSheet(binding.btnCloseReader)
+        binding.addressBar.setTextAppearance(R.style.TextAppearance_Safari_Address)
         applyGlassOpacity()
 
         binding.addressBar.setOnEditorActionListener { _, actionId, event ->
@@ -611,6 +710,7 @@ class MainActivity : AppCompatActivity() {
                         binding.addressBar.selectAll()
                     }
                 }
+                showSearchCover()
                 updateChromeForState()
             } else {
                 hideSuggestions()
@@ -626,13 +726,14 @@ class MainActivity : AppCompatActivity() {
                 hideSuggestions()
                 return@SimpleTextWatcher
             }
+            // Keep opaque cover over the page (hides Google's own search chrome)
             if (text.isBlank() || text == "about:blank" || text.length < 2) {
-                hideSuggestions()
+                showSearchCover()
                 return@SimpleTextWatcher
             }
             suggestJob?.cancel()
             suggestJob = lifecycleScope.launch {
-                delay(160)
+                delay(140)
                 if (!editingAddress) return@launch
                 val hist = repo.searchHistory(text)
                     .filter { it.url != "about:blank" && !it.title.equals("about:blank", true) }
@@ -642,19 +743,6 @@ class MainActivity : AppCompatActivity() {
                 showSuggestions((hist + remote).distinctBy { it.text.lowercase() }.take(8))
             }
         })
-
-        // Tap page to dismiss chrome edit / show chrome
-        binding.webView.setOnTouchListener { _, event ->
-            if (event.action == android.view.MotionEvent.ACTION_DOWN) {
-                if (editingAddress) {
-                    binding.addressBar.clearFocus()
-                    hideKeyboard()
-                } else if (chromeCollapsed) {
-                    setChromeCollapsed(false)
-                }
-            }
-            false
-        }
 
         binding.btnBack.setOnClickListener { navigateBack() }
         binding.btnForward.setOnClickListener { binding.webView.goForward() }
@@ -671,10 +759,14 @@ class MainActivity : AppCompatActivity() {
         binding.btnBookmarks.setOnClickListener { showBookmarks() }
         binding.btnTabs.setOnClickListener { showTabs() }
         binding.btnMore.setOnClickListener { showMoreMenu() }
-        binding.btnTabsDone.setOnClickListener { hideTabs() }
+        binding.btnTabsDone.setOnClickListener {
+            ensureActiveTabInMode()
+            hideTabs()
+        }
         binding.btnNewTab.setOnClickListener { newTab(isPrivate) }
-        binding.tabsCountPill.setOnClickListener { togglePrivate() }
-        binding.btnTogglePrivate.setOnClickListener { togglePrivate() }
+        binding.btnTabsMenu.setOnClickListener { showTabsMenu() }
+        binding.tabsCountPill.setOnClickListener { switchTabsMode(!isPrivate) }
+        binding.btnTogglePrivate.setOnClickListener { switchTabsMode(!isPrivate) }
         binding.btnAa.setOnClickListener {
             if (editingAddress) return@setOnClickListener
             if (active.isStartPage) {
@@ -773,7 +865,12 @@ class MainActivity : AppCompatActivity() {
         menu.root.clipToOutline = true
         (menu.root.getChildAt(0) as? View)?.let { card ->
             LiquidGlass.polishCapsule(card, 26f)
-            card.background = LiquidGlass.popoverDrawable(this, settings.glassOpacity)
+            card.background = LiquidGlass.menuPopoverDrawable(
+                this,
+                settings.glassOpacity.coerceAtLeast(72),
+                26f,
+                privateMode = isPrivate
+            )
         }
         fun closeAnd(action: () -> Unit) {
             val card = menu.root.getChildAt(0)
@@ -826,15 +923,16 @@ class MainActivity : AppCompatActivity() {
         binding.addressCapsule.background = LiquidGlass.capsuleDrawable(this, o, 22f)
         binding.btnBack.background = LiquidGlass.circleDrawable(this, o)
         binding.btnMore.background = LiquidGlass.circleDrawable(this, o)
-        binding.tabsBottomBar.background = LiquidGlass.capsuleDrawable(this, o, 28f)
-        binding.tabsCountPill.background = LiquidGlass.capsuleDrawable(this, o, 20f)
         binding.btnNewTab.background = LiquidGlass.circleDrawable(this, o)
+        binding.btnTabsMenu.background = LiquidGlass.circleDrawable(this, o)
         binding.historyToolbar.background = LiquidGlass.capsuleDrawable(this, o, 22f)
         LiquidGlass.applyOpacity(binding.btnTabsDone, o)
-        LiquidGlass.applyOpacity(binding.tabsOverlay, o)
+        // Tabs overlay backdrop stays dense — page must not bleed through
         LiquidGlass.applyOpacity(binding.historyOverlay, o)
         LiquidGlass.applyOpacity(binding.suggestionsList, o)
         LiquidGlass.applyOpacity(binding.btnCloseReader, o)
+        refreshTabsModeChrome()
+        syncTabsModeTrack(animate = false)
         binding.favoritesList.adapter?.notifyDataSetChanged()
         binding.tabsList.adapter?.notifyDataSetChanged()
     }
@@ -850,7 +948,12 @@ class MainActivity : AppCompatActivity() {
         fun paint(value: Int) {
             sheet.opacityValue.text = "$value%"
             sheet.opacityPreview.background = LiquidGlass.capsuleDrawable(this, value, 22f)
-            sheet.opacityCard.background = LiquidGlass.popoverDrawable(this, value)
+            sheet.opacityCard.background = LiquidGlass.menuPopoverDrawable(
+                this,
+                value.coerceAtLeast(72),
+                26f,
+                privateMode = isPrivate
+            )
         }
         val current = settings.glassOpacity
         sheet.opacitySeek.max = BrowserSettings.MAX_GLASS_OPACITY - BrowserSettings.MIN_GLASS_OPACITY
@@ -880,17 +983,93 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSettingsMenu() {
         val adLabel = if (settings.adBlockEnabled) "Блокировка рекламы: вкл." else "Блокировка рекламы: выкл."
+        val themeLabel = when (settings.themeMode) {
+            BrowserSettings.THEME_LIGHT -> "Тема: день"
+            BrowserSettings.THEME_DARK -> "Тема: ночь"
+            else -> "Тема: системная"
+        }
         GlassSheet.showList(
             this,
             title = "Настройки",
             items = listOf(
                 GlassSheet.Item(adLabel) { toggleAdBlock(reloadPage = false) },
+                GlassSheet.Item(themeLabel) { cycleThemeMode() },
                 GlassSheet.Item("Обои стартовой") { showWallpaperPicker() },
                 GlassSheet.Item("Прозрачность стекла (${settings.glassOpacity}%)") {
                     showGlassOpacityPicker()
                 }
-            )
+            ),
+            privateMode = isPrivate
         )
+    }
+
+    private fun cycleThemeMode() {
+        settings.themeMode = when (settings.themeMode) {
+            BrowserSettings.THEME_SYSTEM -> BrowserSettings.THEME_LIGHT
+            BrowserSettings.THEME_LIGHT -> BrowserSettings.THEME_DARK
+            else -> BrowserSettings.THEME_SYSTEM
+        }
+        SafariApp.applyThemeMode(settings.themeMode)
+        val label = when (settings.themeMode) {
+            BrowserSettings.THEME_LIGHT -> "День"
+            BrowserSettings.THEME_DARK -> "Ночь"
+            else -> "Системная"
+        }
+        Toast.makeText(this, "Тема: $label", Toast.LENGTH_SHORT).show()
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupAddressTabSwipe() {
+        addressTabSwipe?.detach()
+        // Bind to addressBar (domain pill text): EditText must consume DOWN so MOVE
+        // is not stolen by selection / parent scroll. Aa / reload stay as sibling buttons.
+        addressTabSwipe = AddressTabSwipe(
+            touchTarget = binding.addressBar,
+            slideTarget = binding.contentContainer,
+            canSwipe = {
+                !editingAddress &&
+                    !binding.addressBar.hasFocus() &&
+                    binding.tabsOverlay.visibility != View.VISIBLE
+            },
+            tabCount = { tabs.count { it.isPrivate == isPrivate } },
+            onSwitchTab = { next -> switchToAdjacentTab(next) },
+            onTapAddress = {
+                binding.addressBar.requestFocus()
+                showKeyboard()
+            }
+        ).also { it.attach() }
+    }
+
+    private fun switchToAdjacentTab(next: Boolean) {
+        val mode = tabs.filter { it.isPrivate == isPrivate }
+        if (mode.size < 2) return
+        val idx = mode.indexOfFirst { it.id == activeId }.let { if (it < 0) 0 else it }
+        val target = mode[if (next) (idx + 1) % mode.size else (idx - 1 + mode.size) % mode.size]
+        if (target.id == activeId) return
+        selectTab(target.id)
+    }
+
+    private fun setupEdgeBackGesture() {
+        edgeBack?.detach()
+        edgeBack = EdgeBackGesture(
+            touchTarget = binding.webView,
+            slideTarget = binding.contentContainer,
+            underlay = binding.wallpaperView,
+            canGoBack = {
+                canNavigateBack() &&
+                    binding.tabsOverlay.visibility != View.VISIBLE &&
+                    !editingAddress
+            },
+            onCommitBack = { navigateBack() },
+            onDownExtra = {
+                if (editingAddress) {
+                    binding.addressBar.clearFocus()
+                    hideKeyboard()
+                } else if (chromeCollapsed) {
+                    setChromeCollapsed(false)
+                }
+            }
+        ).also { it.attach() }
     }
 
     private fun showPageMenu() {
@@ -911,7 +1090,12 @@ class MainActivity : AppCompatActivity() {
         menu.aaDesktopLabel.text =
             if (settings.desktopMode) "Мобильная версия" else "Версия для компьютера"
         LiquidGlass.polishCapsule(menu.aaCard, 26f)
-        menu.aaCard.background = LiquidGlass.popoverDrawable(this, settings.glassOpacity)
+        menu.aaCard.background = LiquidGlass.menuPopoverDrawable(
+            this,
+            settings.glassOpacity.coerceAtLeast(72),
+            26f,
+            privateMode = isPrivate
+        )
 
         fun closeAnd(action: () -> Unit) {
             SafariMotion.disappear(menu.aaCard, toScale = 0.94f, duration = 110L) {
@@ -1001,7 +1185,8 @@ class MainActivity : AppCompatActivity() {
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                 }
-            )
+            ),
+            privateMode = isPrivate
         )
     }
 
@@ -1093,7 +1278,8 @@ class MainActivity : AppCompatActivity() {
             neutral = "Далее",
             onNeutral = { binding.webView.findNext(true) },
             negative = "Закрыть",
-            onNegative = { binding.webView.clearMatches() }
+            onNegative = { binding.webView.clearMatches() },
+            privateMode = isPrivate
         )
     }
 
@@ -1111,7 +1297,8 @@ class MainActivity : AppCompatActivity() {
     /** Состояния хрома как в Safari iOS 18 */
     private fun updateChromeForState() {
         val onStart = active.isStartPage || active.url.isBlank() || active.url == "about:blank"
-        val editing = editingAddress || imeVisible
+        // Только фокус адресной строки — не путать с клавиатурой поля на сайте
+        val editing = editingAddress
         val canBack = canNavigateBack()
         val hasAddressText = binding.addressBar.text?.isNotBlank() == true
 
@@ -1317,7 +1504,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             },
-            negative = "Отмена"
+            negative = "Отмена",
+            privateMode = isPrivate
         )
     }
 
@@ -1471,16 +1659,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun closeTab(id: String) {
         val inOverview = binding.tabsOverlay.visibility == View.VISIBLE
+        val wasPrivate = tabs.find { it.id == id }?.isPrivate == true
         tabs.removeAll { it.id == id }
         tabPreviews.remove(id)?.recycle()
         lifecycleScope.launch { repo.deleteTab(id) }
         val mode = tabs.filter { it.isPrivate == isPrivate }
         if (mode.isEmpty()) {
-            newTab(isPrivate)
+            if (wasPrivate && !tabs.any { it.isPrivate }) {
+                clearPrivateBrowsingData()
+            }
             if (inOverview) {
+                if (!isPrivate) {
+                    val tab = Tab(isPrivate = false)
+                    tabs.add(tab)
+                    activeId = tab.id
+                }
                 renderTabs()
                 updateTabCount()
+                return
             }
+            newTab(isPrivate)
             return
         }
         if (activeId == id) activeId = mode.last().id
@@ -1502,45 +1700,238 @@ class MainActivity : AppCompatActivity() {
         else loadUrl(tab.url)
     }
 
-    private fun togglePrivate() {
-        val leavingPrivate = isPrivate
-        isPrivate = !isPrivate
-        if (leavingPrivate) {
-            // Leaving private: wipe session leftovers and drop private tabs from memory/disk.
-            tabs.removeAll { it.isPrivate }
-            clearPrivateBrowsingData()
+    /** Switch All ↔ Private while staying in the tab overview (iOS swipe). */
+    private fun switchTabsMode(private: Boolean, animateTrack: Boolean = true) {
+        if (isPrivate == private) {
+            syncTabsModeTrack(animateTrack)
+            return
         }
+        isPrivate = private
         applyPrivateSettings()
         applyPrivateUi()
         val mode = tabs.filter { it.isPrivate == isPrivate }
-        if (mode.isEmpty()) newTab(isPrivate)
-        else {
+        if (mode.isNotEmpty()) {
             activeId = mode.first().id
-            renderTabs()
-            selectTab(activeId)
-            showTabs()
         }
+        if (binding.tabsOverlay.visibility == View.VISIBLE) {
+            renderTabs(syncMode = false)
+            syncTabsModeTrack(animateTrack)
+        } else {
+            if (mode.isEmpty()) newTab(isPrivate)
+            else {
+                selectTab(activeId)
+                showTabs()
+            }
+        }
+    }
+
+    private fun togglePrivate() = switchTabsMode(!isPrivate)
+
+    private fun ensureActiveTabInMode() {
+        val mode = tabs.filter { it.isPrivate == isPrivate }
+        if (mode.isEmpty()) {
+            newTab(isPrivate)
+            return
+        }
+        if (mode.none { it.id == activeId }) {
+            activeId = mode.first().id
+            val tab = active
+            applyPrivateSettings()
+            applyPrivateUi()
+            if (tab.isStartPage || tab.url.isBlank() || tab.url == "about:blank") showStartPage()
+            else loadUrl(tab.url)
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupTabsModeSwipe() {
+        tabsModeLiquid = TabsModeLiquidSwitch(
+            host = binding.tabsModeHost,
+            blob = binding.tabsModeBlob,
+            track = binding.tabsModeTrack,
+            labelPrivate = binding.tabsModePrivate,
+            labelAll = binding.tabsModeAll,
+            glassOpacity = { settings.glassOpacity },
+            isPrivateMode = { isPrivate },
+            onCommit = { private -> switchTabsMode(private, animateTrack = true) }
+        ).also { it.attach() }
+    }
+
+    private fun refreshTabsModeChrome() {
+        if (!::binding.isInitialized) return
+        tabsModeLiquid?.refreshChrome()
+    }
+
+    private fun syncTabsModeTrack(animate: Boolean) {
+        if (!::binding.isInitialized) return
+        binding.tabsModeHost.post {
+            binding.tabsModeHost.post {
+                tabsModeLiquid?.syncFromMode(animate)
+            }
+        }
+    }
+
+    private fun animateTabsBubblesIn() {
+        val d = resources.displayMetrics.density
+        val bubbles = listOf(binding.btnNewTab, binding.tabsModeHost, binding.btnTabsDone)
+        bubbles.forEachIndexed { i, view ->
+            view.animate().cancel()
+            view.alpha = 0f
+            view.translationY = 14f * d
+            view.scaleX = 0.92f
+            view.scaleY = 0.92f
+            view.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setStartDelay(40L + i * 35L)
+                .setDuration(SafariMotion.OVERLAY)
+                .setInterpolator(SafariMotion.modeSpring)
+                .withLayer()
+                .start()
+        }
+    }
+
+    private fun showTabsMenu() {
+        val modeTabs = tabs.filter { it.isPrivate == isPrivate }
+        val count = modeTabs.size
+        val menu = DialogTabsMenuBinding.inflate(layoutInflater)
+        val width = (268 * resources.displayMetrics.density).toInt()
+        val popup = PopupWindow(
+            menu.root,
+            width,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            true
+        )
+        popup.elevation = 20f
+        popup.isOutsideTouchable = true
+        popup.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        menu.root.clipToOutline = true
+        (menu.root.getChildAt(0) as? View)?.let { card ->
+            LiquidGlass.polishCapsule(card, 18f)
+            card.background = LiquidGlass.menuPopoverDrawable(
+                this,
+                settings.glassOpacity.coerceAtLeast(78),
+                18f,
+                privateMode = isPrivate
+            )
+        }
+        menu.tabsMenuCopyLabel.text = when {
+            count <= 0 -> "Скопировать ссылки"
+            count % 10 == 1 && count % 100 != 11 -> "Скопировать $count ссылку"
+            count % 10 in 2..4 && count % 100 !in 12..14 -> "Скопировать $count ссылки"
+            else -> "Скопировать $count ссылок"
+        }
+        menu.tabsMenuCloseLabel.text = when {
+            count <= 0 -> "Закрыть вкладки"
+            count % 10 == 1 && count % 100 != 11 -> "Закрыть $count вкладку"
+            count % 10 in 2..4 && count % 100 !in 12..14 -> "Закрыть $count вкладки"
+            else -> "Закрыть $count вкладок"
+        }
+        fun closeAnd(action: () -> Unit) {
+            val card = menu.root.getChildAt(0)
+            if (card != null) {
+                SafariMotion.disappear(
+                    card,
+                    toScale = 0.96f,
+                    toY = -4f * resources.displayMetrics.density,
+                    duration = 100L
+                ) {
+                    popup.dismiss()
+                    action()
+                }
+            } else {
+                popup.dismiss()
+                action()
+            }
+        }
+        menu.tabsMenuGroups.setOnClickListener {
+            closeAnd {
+                Toast.makeText(this, "Группы вкладок скоро", Toast.LENGTH_SHORT).show()
+            }
+        }
+        menu.tabsMenuSelect.setOnClickListener {
+            closeAnd {
+                Toast.makeText(this, "Выбор вкладок скоро", Toast.LENGTH_SHORT).show()
+            }
+        }
+        menu.tabsMenuSort.setOnClickListener {
+            closeAnd {
+                val sorted = modeTabs.sortedBy { it.title.ifBlank { it.url }.lowercase() }
+                val others = tabs.filter { it.isPrivate != isPrivate }
+                tabs.clear()
+                tabs.addAll(if (isPrivate) others + sorted else sorted + others)
+                renderTabs()
+            }
+        }
+        menu.tabsMenuCopy.setOnClickListener {
+            closeAnd {
+                val urls = modeTabs.map { it.url.trim() }
+                    .filter { it.isNotBlank() && it != "about:blank" }
+                if (urls.isEmpty()) {
+                    Toast.makeText(this, "Нет ссылок", Toast.LENGTH_SHORT).show()
+                } else {
+                    val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("tabs", urls.joinToString("\n")))
+                    Toast.makeText(this, "Скопировано: ${urls.size}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        menu.tabsMenuClose.setOnClickListener {
+            closeAnd { closeAllTabsInMode() }
+        }
+        popup.showAsDropDown(
+            binding.btnTabsMenu,
+            0,
+            (4 * resources.displayMetrics.density).toInt()
+        )
+        (menu.root.getChildAt(0) as? View)?.let { card ->
+            SafariMotion.appear(
+                card,
+                fromScale = 0.94f,
+                fromY = -6f * resources.displayMetrics.density,
+                duration = SafariMotion.POPOVER
+            )
+        }
+    }
+
+    private fun closeAllTabsInMode() {
+        val ids = tabs.filter { it.isPrivate == isPrivate }.map { it.id }
+        if (ids.isEmpty()) return
+        val closingPrivate = isPrivate
+        ids.forEach { id ->
+            tabPreviews.remove(id)?.recycle()
+            lifecycleScope.launch { repo.deleteTab(id) }
+        }
+        tabs.removeAll { it.isPrivate == isPrivate }
+        if (closingPrivate) clearPrivateBrowsingData()
+        if (!isPrivate) {
+            val tab = Tab(isPrivate = false)
+            tabs.add(tab)
+            activeId = tab.id
+            showStartPage()
+        }
+        renderTabs()
+        updateTabCount()
     }
 
     private fun showTabs() {
         captureActiveTabPreview()
         renderTabs()
+        syncTabsModeTrack(animate = false)
         val overlay = binding.tabsOverlay
         overlay.animate().cancel()
         overlay.visibility = View.VISIBLE
-        SafariMotion.appear(overlay, fromScale = 0.985f, fromY = 12f * resources.displayMetrics.density)
+        // Drop address chrome immediately so contentContainer can go full-bleed;
+        // otherwise a white gap stays under the tab bar (where chrome reserved space).
         binding.bottomChrome.animate().cancel()
-        binding.bottomChrome.animate()
-            .alpha(0f)
-            .translationY(24f * resources.displayMetrics.density)
-            .setDuration(SafariMotion.OVERLAY)
-            .setInterpolator(SafariMotion.softIn)
-            .withEndAction {
-                binding.bottomChrome.visibility = View.GONE
-                binding.bottomChrome.alpha = 1f
-                binding.bottomChrome.translationY = 0f
-            }
-            .start()
+        binding.bottomChrome.visibility = View.GONE
+        binding.bottomChrome.alpha = 1f
+        binding.bottomChrome.translationY = 0f
+        syncContentAboveChrome()
+        SafariMotion.appear(overlay, fromScale = 0.97f, fromY = 18f * resources.displayMetrics.density)
+        animateTabsBubblesIn()
         updateTabCount()
     }
 
@@ -1549,6 +1940,7 @@ class MainActivity : AppCompatActivity() {
         if (overlay.visibility != View.VISIBLE) {
             binding.bottomChrome.visibility = View.VISIBLE
             SafariMotion.reset(binding.bottomChrome)
+            syncContentAboveChrome()
             return
         }
         overlay.animate().cancel()
@@ -1559,11 +1951,13 @@ class MainActivity : AppCompatActivity() {
         ) {
             overlay.visibility = View.GONE
             SafariMotion.reset(overlay)
+            syncContentAboveChrome()
         }
         binding.bottomChrome.animate().cancel()
         binding.bottomChrome.visibility = View.VISIBLE
         binding.bottomChrome.alpha = 0f
         binding.bottomChrome.translationY = 16f * resources.displayMetrics.density
+        syncContentAboveChrome()
         binding.bottomChrome.animate()
             .alpha(1f)
             .translationY(0f)
@@ -1594,27 +1988,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun renderTabs() {
+    private fun renderTabs(syncMode: Boolean = true) {
         val modeTabs = tabs.filter { it.isPrivate == isPrivate }
+        val emptyPrivate = isPrivate && modeTabs.isEmpty()
+        binding.tabsPrivateEmpty.visibility = if (emptyPrivate) View.VISIBLE else View.GONE
+        binding.tabsList.visibility = if (emptyPrivate) View.GONE else View.VISIBLE
         binding.tabsList.adapter = TabsAdapter(modeTabs, tabPreviews, ::selectTab, ::closeTab)
-        updateTabCount()
+        updateTabCount(syncMode = syncMode)
     }
 
-    private fun updateTabCount() {
-        val count = tabs.count { it.isPrivate == isPrivate }.coerceAtLeast(1)
-        binding.btnTabs.text = count.toString()
+    private fun updateTabCount(syncMode: Boolean = true) {
+        val count = tabs.count { it.isPrivate == isPrivate }
+        val chromeCount = count.coerceAtLeast(1)
+        binding.btnTabs.text = chromeCount.toString()
         if (::binding.isInitialized) {
-            val label = when {
-                isPrivate -> when {
-                    count % 10 == 1 && count % 100 != 11 -> "$count приватная"
-                    count % 10 in 2..4 && count % 100 !in 12..14 -> "$count приватные"
-                    else -> "$count приватных"
+            val allCount = tabs.count { !it.isPrivate }.coerceAtLeast(0)
+            // iOS: when private is active, the other group peeks as a number only ("36")
+            binding.tabsModeAll.text = if (isPrivate) {
+                allCount.coerceAtLeast(1).toString()
+            } else {
+                val n = allCount.coerceAtLeast(1)
+                when {
+                    n % 10 == 1 && n % 100 != 11 -> "$n вкладка"
+                    n % 10 in 2..4 && n % 100 !in 12..14 -> "$n вкладки"
+                    else -> "$n вкладок"
                 }
+            }
+            binding.tabsModePrivate.text = "Частный доступ"
+            val label = when {
+                isPrivate -> "Частный доступ"
                 count % 10 == 1 && count % 100 != 11 -> "$count вкладка"
                 count % 10 in 2..4 && count % 100 !in 12..14 -> "$count вкладки"
                 else -> "$count вкладок"
             }
             binding.tabsCountPill.text = label
+            binding.tabsTitle.text = if (isPrivate) "Приватные вкладки" else "Вкладки"
+            binding.tabsModeAll.requestLayout()
+            if (syncMode) syncTabsModeTrack(animate = false)
         }
     }
 
@@ -1627,7 +2037,12 @@ class MainActivity : AppCompatActivity() {
             android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
         )
         val sheet = ru.srr.safari.databinding.DialogBookmarksBinding.inflate(layoutInflater)
-        sheet.bookmarksCard.background = LiquidGlass.popoverDrawable(this, settings.glassOpacity)
+        sheet.bookmarksCard.background = LiquidGlass.menuPopoverDrawable(
+            this,
+            settings.glassOpacity.coerceAtLeast(72),
+            26f,
+            privateMode = isPrivate
+        )
         LiquidGlass.polishCapsule(sheet.bookmarksCard, 26f)
         sheet.bookmarksList.layoutManager = LinearLayoutManager(this)
         lateinit var adapter: BookmarkListAdapter
@@ -1787,7 +2202,12 @@ class MainActivity : AppCompatActivity() {
         val host = if (url.isBlank()) "safari" else UrlUtils.displayHost(url)
         val sheet = com.google.android.material.bottomsheet.BottomSheetDialog(this, R.style.Theme_Safari_BottomSheet)
         val b = ru.srr.safari.databinding.DialogShareSheetBinding.inflate(layoutInflater)
-        b.shareCard.background = LiquidGlass.popoverDrawable(this, settings.glassOpacity)
+        b.shareCard.background = LiquidGlass.menuPopoverDrawable(
+            this,
+            settings.glassOpacity.coerceAtLeast(72),
+            26f,
+            privateMode = isPrivate
+        )
         LiquidGlass.polishCapsule(b.shareCard, 28f)
         b.shareTitle.text = title
         b.shareHost.text = host
@@ -2317,7 +2737,7 @@ class MainActivity : AppCompatActivity() {
             val opacity = BrowserSettings(parent.context).glassOpacity
             val card = b.tabPreview.parent as? View
             card?.background = LiquidGlass.capsuleDrawable(parent.context, opacity, 22f)
-            card?.let { LiquidGlass.polishCapsule(it, 22f) }
+            card?.let { LiquidGlass.polishTabCard(it, 22f) }
             b.tabCardClose.background = LiquidGlass.circleDrawable(parent.context, opacity)
             LiquidGlass.polishCircle(b.tabCardClose)
             return VH(b)

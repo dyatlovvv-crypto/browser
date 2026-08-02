@@ -32,6 +32,11 @@ class BrowserSettings(context: Context) {
             .putInt(KEY_TEXT_ZOOM, value.coerceIn(MIN_TEXT_ZOOM, MAX_TEXT_ZOOM))
             .apply()
 
+    /** system | light | dark */
+    var themeMode: String
+        get() = prefs.getString(KEY_THEME, THEME_SYSTEM) ?: THEME_SYSTEM
+        set(value) = prefs.edit().putString(KEY_THEME, value).apply()
+
     companion object {
         private const val PREFS = "safari_settings"
         private const val KEY_ADBLOCK = "adblock_enabled"
@@ -39,6 +44,10 @@ class BrowserSettings(context: Context) {
         private const val KEY_WALLPAPER = "wallpaper_id"
         private const val KEY_GLASS_OPACITY = "glass_opacity"
         private const val KEY_TEXT_ZOOM = "text_zoom"
+        private const val KEY_THEME = "theme_mode"
+        const val THEME_SYSTEM = "system"
+        const val THEME_LIGHT = "light"
+        const val THEME_DARK = "dark"
         const val WALLPAPER_FILE = "start_wallpaper.jpg"
         const val MIN_GLASS_OPACITY = 40
         const val MAX_GLASS_OPACITY = 100

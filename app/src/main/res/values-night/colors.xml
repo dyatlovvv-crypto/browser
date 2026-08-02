@@ -2,7 +2,7 @@
 <resources>
     <color name="safari_blue">#0A84FF</color>
     <color name="safari_bg">#000000</color>
-    <color name="safari_page_bg">#1C1C1E</color>
+    <color name="safari_page_bg">#000000</color>
     <color name="safari_bar">#1C1C1E</color>
     <color name="safari_capsule">#2C2C2E</color>
     <color name="safari_text">#FFFFFF</color>
@@ -21,7 +21,12 @@
     <color name="safari_start_title">#FFFFFF</color>
     <color name="safari_start_muted">#CCFFFFFF</color>
     <color name="safari_glass_fill">#2C2C2E</color>
+    <color name="safari_mode_blob_light">#3A3A3C</color>
+    <color name="safari_mode_blob_private">#1C1C1E</color>
+    <color name="safari_menu_scrim_light">#D91C1C1E</color>
+    <color name="safari_menu_scrim_private">#BF000000</color>
     <color name="safari_glass_stroke">#55FFFFFF</color>
+    <color name="safari_glass_inner_stroke">#22FFFFFF</color>
     <color name="safari_glass_specular">#33FFFFFF</color>
     <color name="safari_circle_fill">#2C2C2E</color>
     <color name="safari_chrome_scrim">#E61C1C1E</color>
@@ -35,4 +40,5 @@
     <color name="safari_glass_close">#AA000000</color>
     <color name="safari_blue_glass">#0A84FF</color>
     <color name="safari_overlay_glass">#1C1C1E</color>
+    <color name="safari_suggestions_bg">#FF1C1C1E</color>
 </resources>

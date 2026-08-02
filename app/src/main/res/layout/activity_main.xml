@@ -224,48 +224,147 @@
                 android:clipToPadding="false"
                 android:overScrollMode="never"
                 android:paddingStart="10dp"
-                android:paddingTop="12dp"
+                android:paddingTop="56dp"
                 android:paddingEnd="10dp"
                 android:paddingBottom="110dp" />
 
-            <!-- Safari bottom: + | N вкладок | ✓ -->
+            <!-- Empty private browsing education (iOS-like) -->
+            <LinearLayout
+                android:id="@+id/tabsPrivateEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:paddingHorizontal="36dp"
+                android:paddingTop="120dp"
+                android:paddingBottom="120dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_private_hand_large" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:text="Частный доступ"
+                    android:textColor="@color/safari_text"
+                    android:textSize="22sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:gravity="center"
+                    android:lineSpacingExtra="3dp"
+                    android:text="В режиме «Частный доступ» Safari не сохраняет историю, данные поиска и автозаполнения после закрытия вкладок."
+                    android:textColor="@color/safari_muted"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
+            <ImageButton
+                android:id="@+id/btnTabsMenu"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_gravity="top|start"
+                android:layout_marginStart="14dp"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_tabs_circle"
+                android:contentDescription="Меню вкладок"
+                android:padding="9dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_more" />
+
+            <!-- iOS video: three separate bubbles, center pill is wrap-content & compact -->
             <LinearLayout
                 android:id="@+id/tabsBottomBar"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="58dp"
                 android:layout_gravity="bottom"
-                android:layout_marginHorizontal="14dp"
-                android:layout_marginBottom="18dp"
-                android:background="@drawable/bg_tabs_bottom_bar"
+                android:layout_marginBottom="6dp"
+                android:background="@android:color/transparent"
+                android:clipChildren="false"
                 android:elevation="0dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:paddingHorizontal="10dp">
+                android:paddingHorizontal="18dp">
 
                 <ImageButton
                     android:id="@+id/btnNewTab"
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
                     android:background="@drawable/bg_tabs_circle"
                     android:contentDescription="Новая вкладка"
-                    android:padding="11dp"
+                    android:padding="10dp"
                     android:scaleType="centerInside"
                     android:src="@drawable/ic_tab_plus" />
+
+                <FrameLayout
+                    android:id="@+id/tabsModeHost"
+                    android:layout_width="0dp"
+                    android:layout_height="42dp"
+                    android:layout_marginHorizontal="8dp"
+                    android:layout_weight="1"
+                    android:clipChildren="true"
+                    android:clipToPadding="true">
+
+                    <!-- Liquid Glass droplet: morphs width/X with swipe offset -->
+                    <View
+                        android:id="@+id/tabsModeBlob"
+                        android:layout_width="48dp"
+                        android:layout_height="36dp"
+                        android:layout_gravity="center_vertical|start"
+                        android:background="@drawable/bg_tabs_mode_pill"
+                        android:clickable="false"
+                        android:focusable="false" />
+
+                    <LinearLayout
+                        android:id="@+id/tabsModeTrack"
+                        android:layout_width="wrap_content"
+                        android:layout_height="match_parent"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/tabsModePrivate"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:ellipsize="none"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:paddingHorizontal="15dp"
+                            android:text="Частный доступ"
+                            android:textColor="@color/safari_muted"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tabsModeAll"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:layout_marginStart="6dp"
+                            android:ellipsize="none"
+                            android:gravity="center"
+                            android:maxLines="1"
+                            android:minWidth="40dp"
+                            android:paddingHorizontal="15dp"
+                            android:text="1 вкладка"
+                            android:textColor="@color/safari_text"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </FrameLayout>
 
                 <TextView
                     android:id="@+id/tabsCountPill"
                     android:layout_width="0dp"
-                    android:layout_height="40dp"
-                    android:layout_marginHorizontal="10dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/bg_tabs_count_pill"
-                    android:gravity="center"
-                    android:text="1 вкладка"
-                    android:textColor="@color/safari_text"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
+                    android:layout_height="0dp"
+                    android:visibility="gone" />
 
-                <!-- keep for private toggle (hidden stub was top bar) -->
                 <TextView
                     android:id="@+id/btnTogglePrivate"
                     android:layout_width="0dp"
@@ -280,11 +379,11 @@
 
                 <ImageButton
                     android:id="@+id/btnTabsDone"
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
                     android:background="@drawable/bg_tabs_done"
                     android:contentDescription="Готово"
-                    android:padding="10dp"
+                    android:padding="9dp"
                     android:scaleType="centerInside"
                     android:src="@drawable/ic_tab_done" />
             </LinearLayout>
@@ -375,6 +474,7 @@
                     android:textColor="@color/safari_text"
                     android:textColorHint="@color/safari_muted"
                     android:textCursorDrawable="@null"
+                    android:textAppearance="@style/TextAppearance.Safari.Address"
                     android:textSize="16sp" />
 
                 <ImageButton

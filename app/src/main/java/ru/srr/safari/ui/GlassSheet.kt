@@ -29,16 +29,22 @@ object GlassSheet {
 
     private fun glassOpacity(context: Context): Int = BrowserSettings(context).glassOpacity
 
-    private fun styleCard(context: Context, card: View) {
+    private fun styleCard(context: Context, card: View, privateMode: Boolean = false) {
         LiquidGlass.polishCapsule(card, 26f)
-        card.background = LiquidGlass.popoverDrawable(context, glassOpacity(context))
+        card.background = LiquidGlass.menuPopoverDrawable(
+            context,
+            glassOpacity(context).coerceAtLeast(if (privateMode) 75 else 72),
+            26f,
+            privateMode = privateMode
+        )
     }
 
     fun showList(
         context: Context,
         title: String? = null,
         items: List<Item>,
-        cancelLabel: String? = "Отмена"
+        cancelLabel: String? = "Отмена",
+        privateMode: Boolean = false
     ): Dialog {
         val dialog = baseDialog(context)
         val binding = DialogGlassSheetBinding.inflate(LayoutInflater.from(context))
@@ -61,7 +67,7 @@ object GlassSheet {
                 item.action()
             })
         }
-        styleCard(context, binding.sheetCard)
+        styleCard(context, binding.sheetCard, privateMode)
         dialog.setContentView(binding.root)
         dialog.show()
         sizeWindow(dialog)
@@ -82,7 +88,8 @@ object GlassSheet {
         neutral: String? = null,
         onNeutral: (() -> Unit)? = null,
         negative: String = "Закрыть",
-        onNegative: (() -> Unit)? = null
+        onNegative: (() -> Unit)? = null,
+        privateMode: Boolean = false
     ): Dialog {
         val dialog = baseDialog(context)
         val binding = DialogGlassSheetBinding.inflate(LayoutInflater.from(context))
@@ -117,7 +124,7 @@ object GlassSheet {
         }
         addAction(negative, muted = true) { onNegative?.invoke() }
 
-        styleCard(context, binding.sheetCard)
+        styleCard(context, binding.sheetCard, privateMode)
         dialog.setContentView(binding.root)
         dialog.show()
         sizeWindow(dialog)

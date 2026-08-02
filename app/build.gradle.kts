@@ -15,8 +15,8 @@ android {
         minSdk = 26
         targetSdk = 35
 
-        val appVersionName = "1.4.5"
-        versionCode = 43
+        val appVersionName = "1.5.9"
+        versionCode = 57
         versionName = appVersionName
         resValue("string", "app_name", "Safari")
         resValue("string", "app_version", appVersionName)
@@ -99,6 +99,7 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.recyclerview:recyclerview:1.2.1")
+    implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
