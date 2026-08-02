@@ -6,7 +6,6 @@ import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
-import androidx.dynamicanimation.animation.SpringForce
 import kotlin.math.abs
 
 /**
@@ -101,12 +100,7 @@ class AddressTabSwipe(
                 when {
                     goNext -> settleAndSwitch(next = true, width = w)
                     goPrev -> settleAndSwitch(next = false, width = w)
-                    else -> SafariMotion.snapX(
-                        slideTarget,
-                        0f,
-                        SpringForce.STIFFNESS_MEDIUM,
-                        SpringForce.DAMPING_RATIO_MEDIUM_BOUNCY
-                    )
+                    else -> SafariMotion.snapX(slideTarget, 0f)
                 }
                 return true
             }
@@ -116,20 +110,10 @@ class AddressTabSwipe(
 
     private fun settleAndSwitch(next: Boolean, width: Float) {
         val endX = if (next) -width else width
-        SafariMotion.snapX(
-            slideTarget,
-            endX,
-            SpringForce.STIFFNESS_MEDIUM,
-            SpringForce.DAMPING_RATIO_NO_BOUNCY
-        ) {
+        SafariMotion.snapX(slideTarget, endX) {
             onSwitchTab(next)
             slideTarget.translationX = if (next) width * 0.12f else -width * 0.12f
-            SafariMotion.snapX(
-                slideTarget,
-                0f,
-                SpringForce.STIFFNESS_MEDIUM,
-                SpringForce.DAMPING_RATIO_MEDIUM_BOUNCY
-            )
+            SafariMotion.snapX(slideTarget, 0f)
         }
     }
 

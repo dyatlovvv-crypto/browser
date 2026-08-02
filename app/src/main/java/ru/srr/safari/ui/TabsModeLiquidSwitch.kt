@@ -146,8 +146,8 @@ class TabsModeLiquidSwitch(
         cancelSpring()
         val holder = FloatValueHolder(progress)
         spring = SpringAnimation(holder).setSpring(
-            SpringForce(target).setStiffness(SpringForce.STIFFNESS_MEDIUM)
-                .setDampingRatio(SpringForce.DAMPING_RATIO_MEDIUM_BOUNCY)
+            SpringForce(target).setStiffness(SafariMotion.STIFFNESS)
+                .setDampingRatio(SafariMotion.DAMPING)
         ).also { anim ->
             anim.addUpdateListener { _, value, _ ->
                 progress = value

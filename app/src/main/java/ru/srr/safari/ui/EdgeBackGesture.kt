@@ -5,7 +5,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import androidx.dynamicanimation.animation.DynamicAnimation
-import androidx.dynamicanimation.animation.SpringForce
 import kotlin.math.abs
 
 /**
@@ -76,26 +75,13 @@ class EdgeBackGesture(
                 val dx = (event.rawX - startX).coerceAtLeast(0f)
                 val commit = dx > w * 0.38f && event.actionMasked == MotionEvent.ACTION_UP
                 if (commit) {
-                    SafariMotion.snapX(
-                        slideTarget, w,
-                        SpringForce.STIFFNESS_MEDIUM,
-                        SpringForce.DAMPING_RATIO_NO_BOUNCY
-                    ) {
+                    SafariMotion.snapX(slideTarget, w) {
                         onCommitBack()
                         resetLayers(animated = false)
                     }
-                    SafariMotion.spring(
-                        underlay, DynamicAnimation.SCALE_X, 1f,
-                        SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY
-                    )
-                    SafariMotion.spring(
-                        underlay, DynamicAnimation.SCALE_Y, 1f,
-                        SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY
-                    )
-                    SafariMotion.snapX(
-                        underlay, 0f,
-                        SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY
-                    )
+                    SafariMotion.spring(underlay, DynamicAnimation.SCALE_X, 1f)
+                    SafariMotion.spring(underlay, DynamicAnimation.SCALE_Y, 1f)
+                    SafariMotion.snapX(underlay, 0f)
                 } else {
                     resetLayers(animated = true)
                 }
@@ -107,23 +93,10 @@ class EdgeBackGesture(
 
     private fun resetLayers(animated: Boolean) {
         if (animated) {
-            SafariMotion.snapX(
-                slideTarget, 0f,
-                SpringForce.STIFFNESS_MEDIUM,
-                SpringForce.DAMPING_RATIO_MEDIUM_BOUNCY
-            )
-            SafariMotion.snapX(
-                underlay, 0f,
-                SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY
-            )
-            SafariMotion.spring(
-                underlay, DynamicAnimation.SCALE_X, 1f,
-                SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY
-            )
-            SafariMotion.spring(
-                underlay, DynamicAnimation.SCALE_Y, 1f,
-                SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY
-            ) {
+            SafariMotion.snapX(slideTarget, 0f)
+            SafariMotion.snapX(underlay, 0f)
+            SafariMotion.spring(underlay, DynamicAnimation.SCALE_X, 1f)
+            SafariMotion.spring(underlay, DynamicAnimation.SCALE_Y, 1f) {
                 underlay.visibility = View.GONE
             }
         } else {

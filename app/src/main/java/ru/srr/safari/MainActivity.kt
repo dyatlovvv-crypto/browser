@@ -6,12 +6,17 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.PixelCopy
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -87,6 +92,7 @@ import ru.srr.safari.ui.SafariMotion
 import ru.srr.safari.ui.TabsModeLiquidSwitch
 import androidx.dynamicanimation.animation.SpringForce
 import java.io.File
+import java.io.FileOutputStream
 import java.util.Calendar
 import java.util.UUID
 import kotlin.coroutines.resume
@@ -120,6 +126,11 @@ class MainActivity : AppCompatActivity() {
     private var suggestionsExpanded = false
     private var favoritesEditing = false
     private val tabPreviews = mutableMapOf<String, Bitmap>()
+    private val previewDir by lazy {
+        File(cacheDir, "tab_previews").also { it.mkdirs() }
+    }
+    private val previewHandler = Handler(Looper.getMainLooper())
+    private var previewCaptureRunnable: Runnable? = null
     private val historySectionExpanded = mutableMapOf<String, Boolean>()
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var tabsRestored = false
@@ -234,8 +245,8 @@ class MainActivity : AppCompatActivity() {
             binding.readerOverlay.updatePadding(top = bars.top, bottom = navBottom)
 
             binding.bottomChrome.updatePadding(bottom = maxOf(navBottom, imeBottom))
-            // Tab bar stays compact: nav inset is margin under the pill, not padding inside it
-            // (padding blew up the glass capsule into an empty white slab).
+            // No opaque slab under chrome — transparent over page / wallpaper
+            binding.bottomChrome.setBackgroundResource(android.R.color.transparent)
             binding.tabsBottomBar.updatePadding(bottom = 0)
             (binding.tabsBottomBar.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let { lp ->
                 val bottom = navBottom + (10 * resources.displayMetrics.density).toInt()
@@ -281,11 +292,27 @@ class MainActivity : AppCompatActivity() {
                     binding.tabsOverlay.visibility == View.VISIBLE -> hideTabs()
                     binding.readerOverlay.visibility == View.VISIBLE -> closeReader()
                     editingAddress -> cancelAddressEdit()
-                    canNavigateBack() -> navigateBack()
-                    else -> finish()
+                    canGoBackInWebHistory() -> binding.webView.goBack()
+                    else -> showExitConfirmDialog()
                 }
             }
         })
+    }
+
+    /** Real page behind current entry — ignore about:blank ghosts that keep canGoBack() true. */
+    private fun canGoBackInWebHistory(): Boolean {
+        val wv = binding.webView
+        if (!wv.canGoBack()) return false
+        val list = wv.copyBackForwardList()
+        val prevIndex = list.currentIndex - 1
+        if (prevIndex < 0) return false
+        val prev = list.getItemAtIndex(prevIndex)?.url.orEmpty()
+        return prev.isNotBlank() && prev != "about:blank"
+    }
+
+    override fun onPause() {
+        captureActiveTabPreview()
+        super.onPause()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -440,6 +467,7 @@ class MainActivity : AppCompatActivity() {
                         val title = active.title
                         lifecycleScope.launch { repo.addHistory(title, u) }
                     }
+                    scheduleTabPreviewCapture()
                 }
 
                 override fun onReceivedError(
@@ -1253,6 +1281,26 @@ class MainActivity : AppCompatActivity() {
             active.url == "about:blank" ||
             binding.startPage.visibility == View.VISIBLE
         binding.wallpaperView.visibility = if (onStart) View.VISIBLE else View.GONE
+        syncContentSurface()
+    }
+
+    /**
+     * Top inset area of contentContainer is transparent padding — wallpaper used to
+     * bleed through as a colored strip under the status bar. On web pages fill with
+     * page color; on start keep clear so wallpaper stays immersive.
+     */
+    private fun syncContentSurface() {
+        if (!::binding.isInitialized) return
+        val onStart = active.isStartPage || binding.startPage.visibility == View.VISIBLE
+        if (onStart) {
+            binding.contentContainer.background = null
+        } else {
+            val color = ContextCompat.getColor(
+                this,
+                if (isPrivate) R.color.safari_private_bg else R.color.safari_page_bg
+            )
+            binding.contentContainer.setBackgroundColor(color)
+        }
     }
 
     private fun showFindInPage() {
@@ -1587,11 +1635,19 @@ class MainActivity : AppCompatActivity() {
         binding.webView.loadUrl("about:blank")
         binding.webView.visibility = View.GONE
         binding.startPage.visibility = View.VISIBLE
+        // Drop blank history so system Back is not swallowed by canGoBack()
+        binding.webView.post {
+            try {
+                binding.webView.clearHistory()
+            } catch (_: Exception) {
+            }
+        }
         hideSuggestions()
         setChromeCollapsed(false)
         refreshAddressDisplay()
         applyPrivateUi()
         updateWallpaperVisibility()
+        syncContentSurface()
     }
 
     private fun applyPrivateSettings() {
@@ -1647,6 +1703,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun newTab(private: Boolean) {
+        captureActiveTabPreview()
         val tab = Tab(isPrivate = private)
         tabs.add(tab)
         activeId = tab.id
@@ -1661,7 +1718,7 @@ class MainActivity : AppCompatActivity() {
         val inOverview = binding.tabsOverlay.visibility == View.VISIBLE
         val wasPrivate = tabs.find { it.id == id }?.isPrivate == true
         tabs.removeAll { it.id == id }
-        tabPreviews.remove(id)?.recycle()
+        deleteTabPreview(id)
         lifecycleScope.launch { repo.deleteTab(id) }
         val mode = tabs.filter { it.isPrivate == isPrivate }
         if (mode.isEmpty()) {
@@ -1691,6 +1748,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectTab(id: String) {
+        if (id != activeId) {
+            // Snapshot current page before replacing WebView content
+            captureActiveTabPreview()
+        }
         activeId = id
         val tab = active
         isPrivate = tab.isPrivate
@@ -1901,7 +1962,7 @@ class MainActivity : AppCompatActivity() {
         if (ids.isEmpty()) return
         val closingPrivate = isPrivate
         ids.forEach { id ->
-            tabPreviews.remove(id)?.recycle()
+            deleteTabPreview(id)
             lifecycleScope.launch { repo.deleteTab(id) }
         }
         tabs.removeAll { it.isPrivate == isPrivate }
@@ -1917,22 +1978,43 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTabs() {
+        // Snapshot BEFORE overlay covers the WebView
         captureActiveTabPreview()
-        renderTabs()
-        syncTabsModeTrack(animate = false)
-        val overlay = binding.tabsOverlay
-        overlay.animate().cancel()
-        overlay.visibility = View.VISIBLE
-        // Drop address chrome immediately so contentContainer can go full-bleed;
-        // otherwise a white gap stays under the tab bar (where chrome reserved space).
-        binding.bottomChrome.animate().cancel()
-        binding.bottomChrome.visibility = View.GONE
-        binding.bottomChrome.alpha = 1f
-        binding.bottomChrome.translationY = 0f
-        syncContentAboveChrome()
-        SafariMotion.appear(overlay, fromScale = 0.97f, fromY = 18f * resources.displayMetrics.density)
-        animateTabsBubblesIn()
-        updateTabCount()
+        var revealed = false
+        fun reveal() {
+            if (revealed) return
+            revealed = true
+            hydrateTabPreviews()
+            renderTabs()
+            syncTabsModeTrack(animate = false)
+            val overlay = binding.tabsOverlay
+            overlay.animate().cancel()
+            overlay.visibility = View.VISIBLE
+            binding.bottomChrome.animate().cancel()
+            binding.bottomChrome.visibility = View.GONE
+            binding.bottomChrome.alpha = 1f
+            binding.bottomChrome.translationY = 0f
+            syncContentAboveChrome()
+            SafariMotion.appear(overlay, fromScale = 0.97f, fromY = 18f * resources.displayMetrics.density)
+            animateTabsBubblesIn()
+            updateTabCount()
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            captureActiveTabPreviewAsync {
+                if (revealed) {
+                    if (binding.tabsOverlay.visibility == View.VISIBLE) {
+                        hydrateTabPreviews()
+                        renderTabs(syncMode = false)
+                    }
+                } else {
+                    reveal()
+                }
+            }
+            // Don't stall forever if PixelCopy fails
+            previewHandler.postDelayed({ reveal() }, 160L)
+        } else {
+            reveal()
+        }
     }
 
     private fun hideTabs() {
@@ -1966,29 +2048,182 @@ class MainActivity : AppCompatActivity() {
             .start()
     }
 
-    private fun captureActiveTabPreview() {
-        val wv = binding.webView
-        if (active.isStartPage || wv.visibility != View.VISIBLE || wv.width < 2 || wv.height < 2) {
-            tabPreviews.remove(activeId)
-            return
-        }
+    private fun previewFile(id: String) = File(previewDir, "$id.webp")
+
+    private fun deleteTabPreview(id: String) {
+        tabPreviews.remove(id)?.recycle()
         try {
-            val targetW = 360
-            val targetH = (360f * wv.height / wv.width).toInt().coerceIn(200, 640)
-            val scaled = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.RGB_565)
-            val canvas = Canvas(scaled)
-            val scaleX = targetW.toFloat() / wv.width
-            val scaleY = targetH.toFloat() / wv.height
-            canvas.scale(scaleX, scaleY)
-            wv.draw(canvas)
-            tabPreviews[activeId]?.recycle()
-            tabPreviews[activeId] = scaled
+            previewFile(id).delete()
         } catch (_: Exception) {
-            // ignore capture failures
         }
     }
 
+    private fun hydrateTabPreviews() {
+        tabs.forEach { tab ->
+            val cached = tabPreviews[tab.id]
+            if (cached != null && !cached.isRecycled) return@forEach
+            val disk = loadPreviewFromDisk(tab.id) ?: return@forEach
+            tabPreviews[tab.id] = disk
+        }
+    }
+
+    private fun loadPreviewFromDisk(id: String): Bitmap? {
+        val file = previewFile(id)
+        if (!file.exists() || file.length() < 32) return null
+        return try {
+            BitmapFactory.decodeFile(file.absolutePath)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun persistPreview(id: String, bmp: Bitmap) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val tmp = File(previewDir, "$id.tmp")
+                FileOutputStream(tmp).use { out ->
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        bmp.compress(Bitmap.CompressFormat.WEBP_LOSSY, 72, out)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        bmp.compress(Bitmap.CompressFormat.WEBP, 72, out)
+                    }
+                }
+                if (!tmp.renameTo(previewFile(id))) {
+                    tmp.copyTo(previewFile(id), overwrite = true)
+                    tmp.delete()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun storeTabPreview(id: String, bmp: Bitmap) {
+        tabPreviews.remove(id)?.recycle()
+        tabPreviews[id] = bmp
+        persistPreview(id, bmp)
+    }
+
+    private fun scheduleTabPreviewCapture() {
+        previewCaptureRunnable?.let { previewHandler.removeCallbacks(it) }
+        val tabId = activeId
+        val run = Runnable {
+            if (activeId == tabId) captureActiveTabPreview()
+        }
+        previewCaptureRunnable = run
+        previewHandler.postDelayed(run, 450L)
+    }
+
+    private fun captureActiveTabPreview() {
+        val wv = binding.webView
+        val tabId = activeId
+        if (active.isStartPage || wv.width < 2 || wv.height < 2) return
+        // May be briefly GONE during transitions — still try if laid out
+        try {
+            val targetW = 360
+            val targetH = (360f * wv.height / wv.width).toInt().coerceIn(200, 640)
+            val scaled = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(scaled)
+            canvas.drawColor(Color.WHITE)
+            val scaleX = targetW.toFloat() / wv.width
+            val scaleY = targetH.toFloat() / wv.height
+            canvas.save()
+            canvas.scale(scaleX, scaleY)
+            wv.draw(canvas)
+            canvas.restore()
+            if (!isUselessCapture(scaled)) {
+                storeTabPreview(tabId, scaled)
+            } else {
+                scaled.recycle()
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun captureActiveTabPreviewAsync(onDone: (() -> Unit)? = null) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            onDone?.invoke()
+            return
+        }
+        val wv = binding.webView
+        val tabId = activeId
+        if (active.isStartPage || wv.width < 2 || wv.height < 2) {
+            onDone?.invoke()
+            return
+        }
+        try {
+            val w = wv.width
+            val h = wv.height
+            val full = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val loc = IntArray(2)
+            wv.getLocationInWindow(loc)
+            val src = Rect(loc[0], loc[1], loc[0] + w, loc[1] + h)
+            val decor = window.decorView
+            val bounds = Rect(0, 0, decor.width.coerceAtLeast(1), decor.height.coerceAtLeast(1))
+            if (!src.intersect(bounds) || src.width() < 2 || src.height() < 2) {
+                full.recycle()
+                onDone?.invoke()
+                return
+            }
+            // PixelCopy needs dest bitmap matching src size
+            val shot = if (src.width() == w && src.height() == h) {
+                full
+            } else {
+                full.recycle()
+                Bitmap.createBitmap(src.width(), src.height(), Bitmap.Config.ARGB_8888)
+            }
+            PixelCopy.request(window, src, shot, { result ->
+                try {
+                    if (result == PixelCopy.SUCCESS && activeId == tabId) {
+                        val targetW = 360
+                        val targetH = (360f * shot.height / shot.width).toInt().coerceIn(200, 640)
+                        val scaled = Bitmap.createScaledBitmap(shot, targetW, targetH, true)
+                        if (!isUselessCapture(scaled)) {
+                            storeTabPreview(tabId, scaled)
+                        } else {
+                            scaled.recycle()
+                        }
+                    }
+                } finally {
+                    if (!shot.isRecycled) shot.recycle()
+                    onDone?.invoke()
+                }
+            }, previewHandler)
+        } catch (_: Exception) {
+            onDone?.invoke()
+        }
+    }
+
+    /** Reject only flat failed captures, not real light/white pages. */
+    private fun isUselessCapture(bmp: Bitmap): Boolean {
+        val stepX = (bmp.width / 10).coerceAtLeast(1)
+        val stepY = (bmp.height / 10).coerceAtLeast(1)
+        var minL = 255
+        var maxL = 0
+        var samples = 0
+        var y = stepY / 2
+        while (y < bmp.height) {
+            var x = stepX / 2
+            while (x < bmp.width) {
+                val c = bmp.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                val l = (r * 3 + g * 4 + b) / 8
+                if (l < minL) minL = l
+                if (l > maxL) maxL = l
+                samples++
+                x += stepX
+            }
+            y += stepY
+        }
+        if (samples < 4) return true
+        // Truly empty HW dump ≈ flat color
+        return (maxL - minL) < 6
+    }
+
     private fun renderTabs(syncMode: Boolean = true) {
+        hydrateTabPreviews()
         val modeTabs = tabs.filter { it.isPrivate == isPrivate }
         val emptyPrivate = isPrivate && modeTabs.isEmpty()
         binding.tabsPrivateEmpty.visibility = if (emptyPrivate) View.VISIBLE else View.GONE
@@ -2037,14 +2272,24 @@ class MainActivity : AppCompatActivity() {
             android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
         )
         val sheet = ru.srr.safari.databinding.DialogBookmarksBinding.inflate(layoutInflater)
-        sheet.bookmarksCard.background = LiquidGlass.menuPopoverDrawable(
+        val card = sheet.bookmarksCard
+        val list = sheet.bookmarksList
+        card.background = LiquidGlass.menuPopoverDrawable(
             this,
             settings.glassOpacity.coerceAtLeast(72),
             26f,
             privateMode = isPrivate
         )
-        LiquidGlass.polishCapsule(sheet.bookmarksCard, 26f)
-        sheet.bookmarksList.layoutManager = LinearLayoutManager(this)
+        LiquidGlass.polishCapsule(card, 26f, pressFeedback = false)
+        val maxListH = (resources.displayMetrics.heightPixels * 0.45f).toInt()
+        list.layoutParams = list.layoutParams.apply {
+            height = if (source.isEmpty()) {
+                (48 * resources.displayMetrics.density).toInt()
+            } else {
+                maxListH
+            }
+        }
+        list.layoutManager = LinearLayoutManager(this)
         lateinit var adapter: BookmarkListAdapter
         fun deleteAt(pos: Int) {
             if (pos !in source.indices) return
@@ -2063,7 +2308,7 @@ class MainActivity : AppCompatActivity() {
             dialog.dismiss()
             loadUrl(it.url)
         })
-        sheet.bookmarksList.adapter = adapter
+        list.adapter = adapter
         ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
             override fun onMove(
                 recyclerView: RecyclerView,
@@ -2072,9 +2317,10 @@ class MainActivity : AppCompatActivity() {
             ): Boolean = false
 
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
-                deleteAt(viewHolder.bindingAdapterPosition)
+                val pos = viewHolder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) deleteAt(pos)
             }
-        }).attachToRecyclerView(sheet.bookmarksList)
+        }).attachToRecyclerView(list)
         sheet.bookmarksHistory.setOnClickListener {
             dialog.dismiss()
             showHistory()
@@ -2086,7 +2332,36 @@ class MainActivity : AppCompatActivity() {
             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
             android.view.ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        SafariMotion.appear(sheet.bookmarksCard, fromScale = 0.94f)
+        SafariMotion.appear(card, fromScale = 0.94f)
+    }
+
+    private fun showExitConfirmDialog() {
+        val dialog = android.app.Dialog(this, R.style.Theme_Safari_GlassDialog)
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
+        )
+        val sheet = ru.srr.safari.databinding.DialogExitConfirmBinding.inflate(layoutInflater)
+        sheet.exitCard.background = LiquidGlass.menuPopoverDrawable(
+            this,
+            settings.glassOpacity.coerceAtLeast(78),
+            22f,
+            privateMode = isPrivate
+        )
+        LiquidGlass.polishCapsule(sheet.exitCard, 22f, pressFeedback = false)
+        sheet.exitConfirm.setOnClickListener {
+            dialog.dismiss()
+            finish()
+        }
+        sheet.exitCancel.setOnClickListener { dialog.dismiss() }
+        dialog.setContentView(sheet.root)
+        dialog.show()
+        dialog.window?.setLayout(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        SafariMotion.appear(sheet.exitCard, fromScale = 0.94f)
     }
 
     private fun showHistory() {

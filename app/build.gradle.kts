@@ -15,8 +15,8 @@ android {
         minSdk = 26
         targetSdk = 35
 
-        val appVersionName = "1.6.0"
-        versionCode = 58
+        val appVersionName = "1.6.6"
+        versionCode = 64
         versionName = appVersionName
         resValue("string", "app_name", "Safari")
         resValue("string", "app_version", appVersionName)

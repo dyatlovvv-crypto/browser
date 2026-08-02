@@ -12,7 +12,6 @@ import android.view.View
 import android.view.ViewOutlineProvider
 import androidx.core.content.ContextCompat
 import androidx.dynamicanimation.animation.DynamicAnimation
-import androidx.dynamicanimation.animation.SpringForce
 import ru.srr.safari.R
 import ru.srr.safari.data.BrowserSettings
 
@@ -269,21 +268,21 @@ object LiquidGlass {
                 MotionEvent.ACTION_DOWN -> {
                     SafariMotion.spring(
                         v, DynamicAnimation.SCALE_X, pressedScale,
-                        SpringForce.STIFFNESS_HIGH, SpringForce.DAMPING_RATIO_NO_BOUNCY
+                        SafariMotion.STIFFNESS, SafariMotion.DAMPING
                     )
                     SafariMotion.spring(
                         v, DynamicAnimation.SCALE_Y, pressedScale,
-                        SpringForce.STIFFNESS_HIGH, SpringForce.DAMPING_RATIO_NO_BOUNCY
+                        SafariMotion.STIFFNESS, SafariMotion.DAMPING
                     )
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     SafariMotion.spring(
                         v, DynamicAnimation.SCALE_X, 1f,
-                        SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_MEDIUM_BOUNCY
+                        SafariMotion.STIFFNESS, SafariMotion.DAMPING
                     )
                     SafariMotion.spring(
                         v, DynamicAnimation.SCALE_Y, 1f,
-                        SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_MEDIUM_BOUNCY
+                        SafariMotion.STIFFNESS, SafariMotion.DAMPING
                     )
                 }
             }

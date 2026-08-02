@@ -1,32 +1,42 @@
 package ru.srr.safari.ui
 
 import android.view.View
+import android.view.animation.PathInterpolator
 import androidx.dynamicanimation.animation.DynamicAnimation
 import androidx.dynamicanimation.animation.SpringAnimation
 import androidx.dynamicanimation.animation.SpringForce
 
-/** Physics-based motion — SpringForce only, no linear ValueAnimators. */
+/** iOS Fluid Interfaces motion for classic Views. */
 object SafariMotion {
+
+    /** Fixed duration for open/close / menu / overlay transitions. */
+    const val DURATION = 400L
 
     const val PRESS_IN = 70L
     const val PRESS_OUT = 140L
-    /** Kept for call-site compatibility; springs ignore duration. */
-    const val CHROME = 180L
-    const val OVERLAY = 200L
-    const val POPOVER = 155L
-    const val MODE = 280L
+    const val CHROME = DURATION
+    const val OVERLAY = DURATION
+    const val POPOVER = DURATION
+    const val MODE = DURATION
 
-    val softOut = android.view.animation.PathInterpolator(0.16f, 1f, 0.3f, 1f)
-    val softIn = android.view.animation.PathInterpolator(0.4f, 0f, 0.7f, 0.2f)
-    val softInOut = android.view.animation.PathInterpolator(0.33f, 0.05f, 0.2f, 1f)
-    val modeSpring = android.view.animation.OvershootInterpolator(0.72f)
+    /** Soft liquid-glass springs (noble glide, minimal bounce). */
+    const val STIFFNESS = 150f
+    const val DAMPING = 0.75f
+
+    /** Apple ease-out cubic bezier. */
+    val iosEaseOut = PathInterpolator(0.25f, 1f, 0.5f, 1f)
+
+    val softOut = iosEaseOut
+    val softIn = iosEaseOut
+    val softInOut = iosEaseOut
+    val modeSpring = iosEaseOut
 
     fun spring(
         view: View,
         property: DynamicAnimation.ViewProperty,
         finalPosition: Float,
-        stiffness: Float = SpringForce.STIFFNESS_MEDIUM,
-        damping: Float = SpringForce.DAMPING_RATIO_MEDIUM_BOUNCY,
+        stiffness: Float = STIFFNESS,
+        damping: Float = DAMPING,
         onEnd: (() -> Unit)? = null
     ): SpringAnimation {
         return SpringAnimation(view, property).apply {
@@ -45,36 +55,42 @@ object SafariMotion {
         view: View,
         fromScale: Float = 0.96f,
         fromY: Float = 0f,
-        duration: Long = POPOVER
+        duration: Long = DURATION
     ) {
         view.animate().cancel()
         view.alpha = 0f
         view.scaleX = fromScale
         view.scaleY = fromScale
         view.translationY = fromY
-        spring(view, DynamicAnimation.ALPHA, 1f, SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY)
-        spring(view, DynamicAnimation.SCALE_X, 1f, SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_LOW_BOUNCY)
-        spring(view, DynamicAnimation.SCALE_Y, 1f, SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_LOW_BOUNCY)
-        spring(view, DynamicAnimation.TRANSLATION_Y, 0f, SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_LOW_BOUNCY)
+        view.animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .translationY(0f)
+            .setDuration(DURATION)
+            .setInterpolator(iosEaseOut)
+            .withLayer()
+            .start()
     }
 
     fun disappear(
         view: View,
         toScale: Float = 0.97f,
         toY: Float = 0f,
-        duration: Long = OVERLAY,
+        duration: Long = DURATION,
         endAction: (() -> Unit)? = null
     ) {
         view.animate().cancel()
-        var pending = 3
-        fun done() {
-            pending--
-            if (pending <= 0) endAction?.invoke()
-        }
-        spring(view, DynamicAnimation.ALPHA, 0f, SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY) { done() }
-        spring(view, DynamicAnimation.SCALE_X, toScale, SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY) { done() }
-        spring(view, DynamicAnimation.TRANSLATION_Y, toY, SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY) { done() }
-        spring(view, DynamicAnimation.SCALE_Y, toScale, SpringForce.STIFFNESS_MEDIUM, SpringForce.DAMPING_RATIO_NO_BOUNCY)
+        view.animate()
+            .alpha(0f)
+            .scaleX(toScale)
+            .scaleY(toScale)
+            .translationY(toY)
+            .setDuration(DURATION)
+            .setInterpolator(iosEaseOut)
+            .withLayer()
+            .withEndAction { endAction?.invoke() }
+            .start()
     }
 
     fun reset(view: View) {
@@ -89,8 +105,8 @@ object SafariMotion {
     fun snapX(
         view: View,
         toX: Float,
-        stiffness: Float = SpringForce.STIFFNESS_MEDIUM,
-        damping: Float = SpringForce.DAMPING_RATIO_MEDIUM_BOUNCY,
+        stiffness: Float = STIFFNESS,
+        damping: Float = DAMPING,
         onEnd: (() -> Unit)? = null
     ) = spring(view, DynamicAnimation.TRANSLATION_X, toX, stiffness, damping, onEnd)
 }

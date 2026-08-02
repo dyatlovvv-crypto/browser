@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingHorizontal="28dp"
+    android:paddingVertical="24dp">
+
+    <LinearLayout
+        android:id="@+id/exitCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_exit_dialog"
+        android:elevation="8dp"
+        android:orientation="vertical"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="22dp"
+        android:paddingBottom="10dp">
+
+        <TextView
+            android:id="@+id/exitTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:letterSpacing="0.01"
+            android:paddingBottom="18dp"
+            android:text="Точно хочешь закрыть?"
+            android:textColor="@color/safari_text"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/exitConfirm"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="Атвичаю"
+            android:textColor="@color/safari_blue"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/safari_menu_hairline" />
+
+        <TextView
+            android:id="@+id/exitCancel"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="Ни в коем случае"
+            android:textColor="@color/safari_muted"
+            android:textSize="16sp" />
+    </LinearLayout>
+</FrameLayout>

@@ -395,7 +395,7 @@
         android:id="@+id/bottomChrome"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:background="@drawable/bg_chrome_scrim"
+        android:background="@android:color/transparent"
         android:elevation="0dp"
         android:gravity="center_vertical"
         android:orientation="vertical"
