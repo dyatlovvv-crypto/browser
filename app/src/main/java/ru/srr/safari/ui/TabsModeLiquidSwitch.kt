@@ -48,6 +48,9 @@ class TabsModeLiquidSwitch(
     private val density = host.resources.displayMetrics.density
     private val stretchMaxPx = 22f * density
     private val cornerDp = 18f
+    private var lastBlobFill = 0
+    private var lastBlobOpacity = -1
+    private var lastBlurStep = -1
 
     @SuppressLint("ClickableViewAccessibility")
     fun attach() {
@@ -212,7 +215,14 @@ class TabsModeLiquidSwitch(
         val light = ContextCompat.getColor(host.context, R.color.safari_mode_blob_light)
         val dark = ContextCompat.getColor(host.context, R.color.safari_mode_blob_private)
         val fill = lerpColor(light, dark, p)
-        blob.background = LiquidGlass.modeBlobDrawable(host.context, fill, glassOpacity())
+        val opacity = glassOpacity()
+        if (fill != lastBlobFill || opacity != lastBlobOpacity || blob.background == null) {
+            if (!LiquidGlass.updateModeBlobFill(blob.background, fill, opacity)) {
+                blob.background = LiquidGlass.modeBlobDrawable(host.context, fill, opacity)
+            }
+            lastBlobFill = fill
+            lastBlobOpacity = opacity
+        }
         applyBlobBlur(p)
 
         // Text: dissolve + tighten tracking at peak stretch; clip keeps glyphs inside pill
@@ -233,18 +243,22 @@ class TabsModeLiquidSwitch(
 
     private fun applyBlobBlur(p: Float) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        // Soft liquid edge: mild blur grows toward private
+        // Soft liquid edge: mild blur grows toward private (quantize to cut RenderEffect churn)
         val radius = lerp(0f, 14f, p)
+        val step = if (radius < 0.5f) 0 else ((radius / 2f).toInt() * 2).coerceAtLeast(2)
+        if (step == lastBlurStep) return
+        lastBlurStep = step
         try {
-            if (radius < 0.5f) {
+            if (step == 0) {
                 blob.setRenderEffect(null)
             } else {
                 blob.setRenderEffect(
-                    RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)
+                    RenderEffect.createBlurEffect(step.toFloat(), step.toFloat(), Shader.TileMode.CLAMP)
                 )
             }
         } catch (_: Throwable) {
             blob.setRenderEffect(null)
+            lastBlurStep = -1
         }
     }
 

@@ -48,6 +48,14 @@ object LiquidGlass {
         return glassRect(context, fillRgb or 0xFF000000.toInt(), cornerDp * d, opacityPercent.coerceIn(70, 100))
     }
 
+    /** Mutate body fill of a [modeBlobDrawable] without reallocating layers. */
+    fun updateModeBlobFill(drawable: Drawable?, fillRgb: Int, opacityPercent: Int): Boolean {
+        val layer = drawable as? LayerDrawable ?: return false
+        val body = layer.getDrawable(0) as? GradientDrawable ?: return false
+        body.setColor(withAlpha(fillRgb or 0xFF000000.toInt(), opacityPercent.coerceIn(70, 100)))
+        return true
+    }
+
     /**
      * Menu / sheet glass with denser scrim so text stays readable over web pages.
      * Light: apple grey-white ~72–80% + tint scrim.

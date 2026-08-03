@@ -92,6 +92,14 @@ class BrowserRepository(context: Context) {
 
     suspend fun upsertTab(tab: TabEntity) = mutex.withLock {
         withContext(Dispatchers.IO) {
+            val existing = tabs.value.find { it.id == tab.id }
+            if (existing != null &&
+                existing.url == tab.url &&
+                existing.title == tab.title &&
+                existing.isPrivate == tab.isPrivate
+            ) {
+                return@withContext
+            }
             val list = listOf(tab) + tabs.value.filterNot { it.id == tab.id }
             tabs.value = list
             saveTabs(list)

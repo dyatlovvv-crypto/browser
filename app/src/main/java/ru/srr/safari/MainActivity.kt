@@ -131,6 +131,7 @@ class MainActivity : AppCompatActivity() {
     }
     private val previewHandler = Handler(Looper.getMainLooper())
     private var previewCaptureRunnable: Runnable? = null
+    private var previewHydrateJob: Job? = null
     private val historySectionExpanded = mutableMapOf<String, Boolean>()
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var tabsRestored = false
@@ -606,8 +607,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Page must end above the chrome. WebView does not honor padding for fixed
-     * HTML elements, so we use bottomMargin on the content container.
+     * Overlays and normal browsing are full-bleed under floating chrome (no grey
+     * slab). Only reserve space when IME is up so inputs stay above the keyboard.
      */
     private fun syncContentAboveChrome() {
         val chrome = binding.bottomChrome
@@ -615,24 +616,17 @@ class MainActivity : AppCompatActivity() {
             binding.tabsOverlay.visibility == View.VISIBLE ||
                 binding.historyOverlay.visibility == View.VISIBLE
         val reserve = when {
-            // Full-bleed overlays must reach the real screen bottom — never leave
-            // a white slab where the address bar used to sit.
             overlayOpen -> 0
             imeVisible -> chrome.height
-            chromeCollapsed -> 0
-            chrome.visibility != View.VISIBLE -> 0
-            else -> chrome.height
+            else -> 0
         }
         val lp = binding.contentContainer.layoutParams as androidx.constraintlayout.widget.ConstraintLayout.LayoutParams
         if (lp.bottomMargin != reserve) {
             lp.bottomMargin = reserve
             binding.contentContainer.layoutParams = lp
         }
-        val startPad = if (reserve > 0) {
-            (16 * resources.displayMetrics.density).toInt()
-        } else {
-            (130 * resources.displayMetrics.density).toInt()
-        }
+        // Start page always keeps room so favorites aren't under the address bar
+        val startPad = (130 * resources.displayMetrics.density).toInt()
         if (binding.startPage.paddingBottom != startPad) {
             binding.startPage.updatePadding(bottom = startPad)
         }
@@ -961,8 +955,13 @@ class MainActivity : AppCompatActivity() {
         LiquidGlass.applyOpacity(binding.btnCloseReader, o)
         refreshTabsModeChrome()
         syncTabsModeTrack(animate = false)
-        binding.favoritesList.adapter?.notifyDataSetChanged()
-        binding.tabsList.adapter?.notifyDataSetChanged()
+        // Glass is set in onCreateViewHolder — recreate rows when opacity changes
+        binding.favoritesList.adapter = null
+        binding.tabsList.adapter = null
+        refreshStartPage()
+        if (binding.tabsOverlay.visibility == View.VISIBLE) {
+            renderTabs(syncMode = false)
+        }
     }
 
     private fun showGlassOpacityPicker() {
@@ -1479,30 +1478,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshStartPage() {
         val favs = if (bookmarks.isNotEmpty()) bookmarks.take(12) else defaultFavorites
-        binding.favoritesList.adapter = FavoriteAdapter(
-            items = favs,
-            editing = favoritesEditing,
-            onClick = { bm ->
-                if (favoritesEditing) {
-                    editFavorite(bm)
-                } else {
-                    loadUrl(bm.url)
-                }
-            },
-            onDelete = { bm ->
-                lifecycleScope.launch {
-                    // если ещё дефолты без файла — сначала сохраним остальные
-                    if (bookmarks.isEmpty()) {
-                        defaultFavorites.filterNot { it.url == bm.url }.forEach {
-                            repo.addBookmark(it.title, it.url)
-                        }
+        val existingFav = binding.favoritesList.adapter as? FavoriteAdapter
+        if (existingFav != null) {
+            existingFav.submit(favs, favoritesEditing)
+        } else {
+            binding.favoritesList.adapter = FavoriteAdapter(
+                items = favs,
+                editing = favoritesEditing,
+                onClick = { bm ->
+                    if (favoritesEditing) {
+                        editFavorite(bm)
                     } else {
-                        repo.removeBookmark(bm.url)
+                        loadUrl(bm.url)
                     }
-                    Toast.makeText(this@MainActivity, "Удалено из избранного", Toast.LENGTH_SHORT).show()
+                },
+                onDelete = { bm ->
+                    lifecycleScope.launch {
+                        // если ещё дефолты без файла — сначала сохраним остальные
+                        if (bookmarks.isEmpty()) {
+                            defaultFavorites.filterNot { it.url == bm.url }.forEach {
+                                repo.addBookmark(it.title, it.url)
+                            }
+                        } else {
+                            repo.removeBookmark(bm.url)
+                        }
+                        Toast.makeText(this@MainActivity, "Удалено из избранного", Toast.LENGTH_SHORT).show()
+                    }
                 }
-            }
-        )
+            )
+        }
         binding.btnCollapseFav.text = if (favoritesEditing) "Готово" else "Изменить"
         val recent = history.filter {
             it.url != "about:blank" &&
@@ -1978,14 +1982,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTabs() {
-        // Snapshot BEFORE overlay covers the WebView
-        captureActiveTabPreview()
+        // minSdk 26: PixelCopy only — skip sync WebView.draw on UI thread
         var revealed = false
         fun reveal() {
             if (revealed) return
             revealed = true
-            hydrateTabPreviews()
             renderTabs()
+            hydrateTabPreviewsAsync()
             syncTabsModeTrack(animate = false)
             val overlay = binding.tabsOverlay
             overlay.animate().cancel()
@@ -1999,22 +2002,17 @@ class MainActivity : AppCompatActivity() {
             animateTabsBubblesIn()
             updateTabCount()
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            captureActiveTabPreviewAsync {
-                if (revealed) {
-                    if (binding.tabsOverlay.visibility == View.VISIBLE) {
-                        hydrateTabPreviews()
-                        renderTabs(syncMode = false)
-                    }
-                } else {
-                    reveal()
+        captureActiveTabPreviewAsync {
+            if (revealed) {
+                if (binding.tabsOverlay.visibility == View.VISIBLE) {
+                    renderTabs(syncMode = false)
                 }
+            } else {
+                reveal()
             }
-            // Don't stall forever if PixelCopy fails
-            previewHandler.postDelayed({ reveal() }, 160L)
-        } else {
-            reveal()
         }
+        // Don't stall forever if PixelCopy fails
+        previewHandler.postDelayed({ reveal() }, 160L)
     }
 
     private fun hideTabs() {
@@ -2052,18 +2050,39 @@ class MainActivity : AppCompatActivity() {
 
     private fun deleteTabPreview(id: String) {
         tabPreviews.remove(id)?.recycle()
-        try {
-            previewFile(id).delete()
-        } catch (_: Exception) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                previewFile(id).delete()
+            } catch (_: Exception) {
+            }
         }
     }
 
-    private fun hydrateTabPreviews() {
-        tabs.forEach { tab ->
-            val cached = tabPreviews[tab.id]
-            if (cached != null && !cached.isRecycled) return@forEach
-            val disk = loadPreviewFromDisk(tab.id) ?: return@forEach
-            tabPreviews[tab.id] = disk
+    private fun hydrateTabPreviewsAsync() {
+        val missing = tabs.map { it.id }.filter { id ->
+            val cached = tabPreviews[id]
+            cached == null || cached.isRecycled
+        }
+        if (missing.isEmpty()) return
+        previewHydrateJob?.cancel()
+        previewHydrateJob = lifecycleScope.launch {
+            val loaded = withContext(Dispatchers.IO) {
+                missing.mapNotNull { id ->
+                    loadPreviewFromDisk(id)?.let { id to it }
+                }
+            }
+            if (loaded.isEmpty()) return@launch
+            loaded.forEach { (id, bmp) ->
+                val cached = tabPreviews[id]
+                if (cached == null || cached.isRecycled) {
+                    tabPreviews[id] = bmp
+                } else {
+                    bmp.recycle()
+                }
+            }
+            if (binding.tabsOverlay.visibility == View.VISIBLE) {
+                (binding.tabsList.adapter as? TabsAdapter)?.notifyPreviewsChanged()
+            }
         }
     }
 
@@ -2108,7 +2127,7 @@ class MainActivity : AppCompatActivity() {
         previewCaptureRunnable?.let { previewHandler.removeCallbacks(it) }
         val tabId = activeId
         val run = Runnable {
-            if (activeId == tabId) captureActiveTabPreview()
+            if (activeId == tabId) captureActiveTabPreviewAsync()
         }
         previewCaptureRunnable = run
         previewHandler.postDelayed(run, 450L)
@@ -2141,10 +2160,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun captureActiveTabPreviewAsync(onDone: (() -> Unit)? = null) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            onDone?.invoke()
-            return
-        }
         val wv = binding.webView
         val tabId = activeId
         if (active.isStartPage || wv.width < 2 || wv.height < 2) {
@@ -2173,18 +2188,29 @@ class MainActivity : AppCompatActivity() {
                 Bitmap.createBitmap(src.width(), src.height(), Bitmap.Config.ARGB_8888)
             }
             PixelCopy.request(window, src, shot, { result ->
-                try {
-                    if (result == PixelCopy.SUCCESS && activeId == tabId) {
-                        val targetW = 360
-                        val targetH = (360f * shot.height / shot.width).toInt().coerceIn(200, 640)
-                        val scaled = Bitmap.createScaledBitmap(shot, targetW, targetH, true)
-                        if (!isUselessCapture(scaled)) {
-                            storeTabPreview(tabId, scaled)
-                        } else {
-                            scaled.recycle()
+                if (result == PixelCopy.SUCCESS && activeId == tabId) {
+                    lifecycleScope.launch(Dispatchers.Default) {
+                        var scaled: Bitmap? = null
+                        try {
+                            val targetW = 360
+                            val targetH = (360f * shot.height / shot.width).toInt().coerceIn(200, 640)
+                            scaled = Bitmap.createScaledBitmap(shot, targetW, targetH, false)
+                            val keep = !isUselessCapture(scaled!!)
+                            withContext(Dispatchers.Main) {
+                                if (keep && activeId == tabId) {
+                                    storeTabPreview(tabId, scaled!!)
+                                    scaled = null
+                                }
+                                onDone?.invoke()
+                            }
+                        } catch (_: Exception) {
+                            withContext(Dispatchers.Main) { onDone?.invoke() }
+                        } finally {
+                            if (!shot.isRecycled) shot.recycle()
+                            scaled?.recycle()
                         }
                     }
-                } finally {
+                } else {
                     if (!shot.isRecycled) shot.recycle()
                     onDone?.invoke()
                 }
@@ -2223,12 +2249,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderTabs(syncMode: Boolean = true) {
-        hydrateTabPreviews()
         val modeTabs = tabs.filter { it.isPrivate == isPrivate }
         val emptyPrivate = isPrivate && modeTabs.isEmpty()
         binding.tabsPrivateEmpty.visibility = if (emptyPrivate) View.VISIBLE else View.GONE
         binding.tabsList.visibility = if (emptyPrivate) View.GONE else View.VISIBLE
-        binding.tabsList.adapter = TabsAdapter(modeTabs, tabPreviews, ::selectTab, ::closeTab)
+        val existing = binding.tabsList.adapter as? TabsAdapter
+        if (existing != null) {
+            existing.submit(modeTabs, tabPreviews)
+        } else {
+            binding.tabsList.adapter = TabsAdapter(modeTabs, tabPreviews, ::selectTab, ::closeTab)
+        }
         updateTabCount(syncMode = syncMode)
     }
 
@@ -2830,14 +2860,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private class FavoriteAdapter(
-        private val items: List<Bookmark>,
-        private val editing: Boolean,
+        items: List<Bookmark>,
+        editing: Boolean,
         private val onClick: (Bookmark) -> Unit,
         private val onDelete: (Bookmark) -> Unit
     ) : RecyclerView.Adapter<FavoriteAdapter.VH>() {
+        private var items: List<Bookmark> = items
+        private var editing: Boolean = editing
+
         class VH(val b: ItemFavoriteBinding) : RecyclerView.ViewHolder(b.root)
 
         fun itemAt(position: Int): Bookmark? = items.getOrNull(position)
+
+        fun submit(next: List<Bookmark>, editing: Boolean) {
+            this.items = next
+            this.editing = editing
+            notifyDataSetChanged()
+        }
 
         override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): VH {
             val b = ItemFavoriteBinding.inflate(android.view.LayoutInflater.from(parent.context), parent, false)
@@ -2879,11 +2918,6 @@ class MainActivity : AppCompatActivity() {
                 cornerRadius = 14f * density
                 setColor(brand)
             }
-            holder.b.favTile.background = LiquidGlass.capsuleDrawable(
-                holder.itemView.context,
-                BrowserSettings(holder.itemView.context).glassOpacity,
-                16f
-            )
             holder.b.favLetter.background = badge
             val pad = (5 * density).toInt()
             holder.b.favLetter.setPadding(pad, pad, pad, pad)
@@ -2998,14 +3032,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private class TabsAdapter(
-        private val items: List<Tab>,
-        private val previews: Map<String, Bitmap>,
+        items: List<Tab>,
+        previews: Map<String, Bitmap>,
         private val onSelect: (String) -> Unit,
         private val onClose: (String) -> Unit
     ) : RecyclerView.Adapter<TabsAdapter.VH>() {
+        private var items: List<Tab> = items
+        private var previews: Map<String, Bitmap> = previews
+
         class VH(val b: ItemTabBinding) : RecyclerView.ViewHolder(b.root)
 
         fun tabIdAt(position: Int): String? = items.getOrNull(position)?.id
+
+        fun submit(next: List<Tab>, previews: Map<String, Bitmap>) {
+            this.items = next
+            this.previews = previews
+            notifyDataSetChanged()
+        }
+
+        fun notifyPreviewsChanged() {
+            notifyDataSetChanged()
+        }
 
         override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): VH {
             val b = ItemTabBinding.inflate(android.view.LayoutInflater.from(parent.context), parent, false)
@@ -3029,11 +3076,6 @@ class MainActivity : AppCompatActivity() {
             holder.b.tabCardTitle.text = title
             val letter = title.firstOrNull()?.uppercaseChar()?.toString() ?: "S"
             holder.b.tabFavicon.text = letter
-            val opacity = BrowserSettings(holder.itemView.context).glassOpacity
-            (holder.b.tabPreview.parent as? View)?.background =
-                LiquidGlass.capsuleDrawable(holder.itemView.context, opacity, 22f)
-            holder.b.tabCardClose.background =
-                LiquidGlass.circleDrawable(holder.itemView.context, opacity)
 
             val preview = previews[tab.id]
             if (preview != null && !preview.isRecycled) {
