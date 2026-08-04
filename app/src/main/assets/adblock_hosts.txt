@@ -140,3 +140,8 @@ reklama.vk.com
 ad.adriver.ru
 *.adriver.ru
 ad.foxitsoftware.com
+
+# video / vast
+imasdk.googleapis.com
+*.adfox.yandex.ru
+vast.yandex.ru

@@ -136,6 +136,69 @@ object GlassSheet {
         return dialog
     }
 
+    fun showConfirm(
+        context: Context,
+        title: String,
+        message: String,
+        positive: String,
+        onPositive: () -> Unit,
+        negative: String = "Отмена",
+        onNegative: (() -> Unit)? = null,
+        destructivePositive: Boolean = false,
+        privateMode: Boolean = false
+    ): Dialog {
+        val dialog = baseDialog(context)
+        dialog.setCanceledOnTouchOutside(false)
+        val binding = DialogGlassSheetBinding.inflate(LayoutInflater.from(context))
+        binding.sheetTitle.visibility = View.VISIBLE
+        binding.sheetTitle.text = title
+
+        val d = context.resources.displayMetrics.density
+        val padH = (16 * d).toInt()
+        val messageView = TextView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            gravity = Gravity.CENTER
+            text = message
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(context, R.color.safari_muted))
+            setPadding(padH, (4 * d).toInt(), padH, (10 * d).toInt())
+        }
+        binding.sheetItems.addView(messageView)
+
+        binding.sheetItems.addView(hairline(context))
+        binding.sheetItems.addView(
+            row(
+                context,
+                Item(positive, destructive = destructivePositive)
+            ) {
+                dialog.dismiss()
+                onPositive()
+            }
+        )
+        binding.sheetItems.addView(hairline(context))
+        binding.sheetItems.addView(
+            row(context, Item(negative, muted = true)) {
+                dialog.dismiss()
+                onNegative?.invoke()
+            }
+        )
+
+        styleCard(context, binding.sheetCard, privateMode)
+        dialog.setContentView(binding.root)
+        dialog.setOnCancelListener { onNegative?.invoke() }
+        dialog.show()
+        sizeWindow(dialog)
+        SafariMotion.appear(
+            binding.sheetCard,
+            fromScale = 0.94f,
+            fromY = 14f * d
+        )
+        return dialog
+    }
+
     private fun baseDialog(context: Context): Dialog {
         val dialog = Dialog(context, R.style.Theme_Safari_GlassDialog)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)

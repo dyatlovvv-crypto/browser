@@ -41,7 +41,6 @@ import android.net.http.SslError
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -77,6 +76,7 @@ import ru.srr.safari.databinding.ItemSimpleBinding
 import ru.srr.safari.databinding.ItemSuggestionBinding
 import ru.srr.safari.databinding.ItemTabBinding
 import ru.srr.safari.engine.AdBlocker
+import ru.srr.safari.engine.AdBlockingWebViewClient
 import ru.srr.safari.engine.CosmeticAdScript
 import ru.srr.safari.engine.InPageTranslateScript
 import ru.srr.safari.engine.PageTranslator
@@ -332,6 +332,9 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
+        if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         binding.webView.apply {
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
             settings.javaScriptEnabled = true
@@ -399,7 +402,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            webViewClient = object : WebViewClient() {
+            webViewClient = object : AdBlockingWebViewClient(adBlocker) {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val u = request?.url?.toString().orEmpty()
                     if (u.isBlank()) return true
@@ -417,16 +420,6 @@ class MainActivity : AppCompatActivity() {
                         return true
                     }
                     return false
-                }
-
-                override fun shouldInterceptRequest(
-                    view: WebView?,
-                    request: WebResourceRequest?
-                ): WebResourceResponse? {
-                    if (request == null) return null
-                    return if (adBlocker.shouldBlock(request.url, request.isForMainFrame)) {
-                        adBlocker.emptyResponse()
-                    } else null
                 }
 
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -460,10 +453,7 @@ class MainActivity : AppCompatActivity() {
                     if (!editingAddress) refreshAddressDisplay()
                     updateChromeForState()
                     injectScrollObserver()
-                    // Cosmetic CSS usually already via document-start; re-apply cheaply if needed
-                    if (adBlocker.enabled) {
-                        view?.evaluateJavascript(CosmeticAdScript.JS, null)
-                    }
+                    injectAdHide(view)
                     if (!isPrivate) {
                         val title = active.title
                         lifecycleScope.launch { repo.addHistory(title, u) }
@@ -496,13 +486,9 @@ class MainActivity : AppCompatActivity() {
                     handler: SslErrorHandler?,
                     error: SslError?
                 ) {
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Проблема с сертификатом")
-                        .setMessage("Соединение может быть небезопасным. Открыть страницу всё равно?")
-                        .setPositiveButton("Открыть") { _, _ -> handler?.proceed() }
-                        .setNegativeButton("Отмена") { _, _ -> handler?.cancel() }
-                        .setOnCancelListener { handler?.cancel() }
-                        .show()
+                    // Auto-accept: banks/CDNs often fire several SSL callbacks per page.
+                    // User asked to skip the confirm prompt.
+                    handler?.proceed()
                 }
             }
         }
@@ -607,17 +593,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Overlays and normal browsing are full-bleed under floating chrome (no grey
-     * slab). Only reserve space when IME is up so inputs stay above the keyboard.
+     * Keep WebView above floating chrome while the bar is visible so sticky page
+     * inputs (Google «Задайте вопрос») aren't under the address capsule.
+     * Full-bleed only when chrome is collapsed / overlays open.
      */
     private fun syncContentAboveChrome() {
         val chrome = binding.bottomChrome
         val overlayOpen =
             binding.tabsOverlay.visibility == View.VISIBLE ||
                 binding.historyOverlay.visibility == View.VISIBLE
+        val browsing = binding.webView.visibility == View.VISIBLE && !active.isStartPage
         val reserve = when {
             overlayOpen -> 0
             imeVisible -> chrome.height
+            chromeCollapsed -> 0
+            browsing -> chrome.height.coerceAtLeast(1)
             else -> 0
         }
         val lp = binding.contentContainer.layoutParams as androidx.constraintlayout.widget.ConstraintLayout.LayoutParams
@@ -1169,6 +1159,7 @@ class MainActivity : AppCompatActivity() {
         adBlocker.enabled = settings.adBlockEnabled
         if (!active.isStartPage && active.url.isNotBlank()) {
             if (settings.adBlockEnabled) {
+                binding.webView.evaluateJavascript(CosmeticAdScript.HIDE_CSS_JS, null)
                 binding.webView.evaluateJavascript(CosmeticAdScript.JS, null)
             } else {
                 binding.webView.evaluateJavascript(CosmeticAdScript.REMOVE_JS, null)
@@ -1628,6 +1619,7 @@ class MainActivity : AppCompatActivity() {
         binding.webView.visibility = View.VISIBLE
         hideSuggestions()
         updateWallpaperVisibility()
+        binding.bottomChrome.post { syncContentAboveChrome() }
     }
 
     private fun showStartPage() {
@@ -1652,6 +1644,7 @@ class MainActivity : AppCompatActivity() {
         applyPrivateUi()
         updateWallpaperVisibility()
         syncContentSurface()
+        binding.bottomChrome.post { syncContentAboveChrome() }
     }
 
     private fun applyPrivateSettings() {

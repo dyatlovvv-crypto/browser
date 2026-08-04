@@ -5,49 +5,19 @@ import android.net.Uri
 import android.webkit.WebResourceResponse
 import java.io.ByteArrayInputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.regex.Pattern
 
 /**
- * Network ad/tracker blocker for WebView via shouldInterceptRequest.
- * Host list from assets + path heuristics. Does not block main-frame documents.
+ * Fast network ad/tracker blocker for [android.webkit.WebViewClient.shouldInterceptRequest].
+ * Hosts: HashSet suffix walk. Host/path needles: precompiled [Pattern].
+ * Does not block main-frame documents.
  */
 class AdBlocker(context: Context) {
     @Volatile
     var enabled: Boolean = true
 
-    /** Exact hosts + suffix hosts flattened into one set for label-walk matching. */
+    /** Exact hosts + registrable suffixes from assets (no leading "*."). */
     private val blockedHosts = ConcurrentHashMap.newKeySet<String>()
-
-    private val pathNeedles = listOf(
-        "/ads/",
-        "/ad/",
-        "/advert",
-        "/banner",
-        "/pagead",
-        "/pagead2",
-        "/doubleclick",
-        "/googlesyndication",
-        "/googleadservices",
-        "/adservice",
-        "/sponsor",
-        "/tracking",
-        "/pixel.",
-        "/beacon",
-        "/collect?",
-        "prebid",
-        "adsystem",
-        "adserver",
-        "/ytimg.com/generate_204",
-        "an.yandex.ru",
-        "advertising",
-        "yandex_ad",
-        "yandexadexchange",
-        "/adfstat",
-        "/adfox",
-        "pagead/js",
-        "pagead/ads",
-        "safe_frame",
-        "imasdk.googleapis"
-    )
 
     private val emptyBody = ByteArray(0)
 
@@ -70,8 +40,27 @@ class AdBlocker(context: Context) {
                 }
             }
         } catch (_: Exception) {
-            // keep empty — fail open
+            // fail open
         }
+        // Always-on fast labels (even if asset missing)
+        blockedHosts.addAll(
+            listOf(
+                "doubleclick.net",
+                "googlesyndication.com",
+                "googleadservices.com",
+                "googletagservices.com",
+                "googletagmanager.com",
+                "adservice.google.com",
+                "adservice.google.ru",
+                "pagead2.googlesyndication.com",
+                "an.yandex.ru",
+                "awaps.yandex.ru",
+                "adfstat.yandex.ru",
+                "yandexadexchange.net",
+                "adfox.ru",
+                "ads.adfox.ru"
+            )
+        )
     }
 
     fun shouldBlock(uri: Uri?, isMainFrame: Boolean): Boolean {
@@ -80,19 +69,22 @@ class AdBlocker(context: Context) {
         if (scheme != "http" && scheme != "https") return false
         val host = uri.host?.lowercase() ?: return false
         if (hostBlocked(host)) return true
-        val path = buildString {
-            append(uri.encodedPath.orEmpty())
-            val q = uri.encodedQuery
-            if (!q.isNullOrEmpty()) {
+        if (HOST_NEEDLE.matcher(host).find()) return true
+        val path = uri.encodedPath.orEmpty()
+        val query = uri.encodedQuery
+        val haystack = if (query.isNullOrEmpty()) {
+            path.lowercase()
+        } else {
+            buildString(path.length + query.length + 1) {
+                append(path)
                 append('?')
-                append(q)
-            }
-        }.lowercase()
-        if (path.isEmpty()) return false
-        return pathNeedles.any { path.contains(it) }
+                append(query)
+            }.lowercase()
+        }
+        if (haystack.isEmpty()) return false
+        return PATH_NEEDLE.matcher(haystack).find()
     }
 
-    /** Backward-compatible string entry used by older call sites. */
     fun shouldBlock(url: String?, isMainFrame: Boolean): Boolean {
         if (!enabled || isMainFrame || url.isNullOrBlank()) return false
         return shouldBlock(Uri.parse(url), isMainFrame)
@@ -111,11 +103,41 @@ class AdBlocker(context: Context) {
     fun emptyResponse(): WebResourceResponse =
         WebResourceResponse(
             "text/plain",
-            "utf-8",
+            "UTF-8",
             ByteArrayInputStream(emptyBody)
         )
 
     companion object {
         private const val ASSET = "adblock_hosts.txt"
+
+        /** Host labels: ads.*, doubleclick, adservice, googleads, … */
+        private val HOST_NEEDLE: Pattern = Pattern.compile(
+            "(^|\\.)(" +
+                "ads|" +
+                "adservice|" +
+                "googleads|" +
+                "doubleclick|" +
+                "googlesyndication|" +
+                "googleadservices|" +
+                "pagead2|" +
+                "adfox|" +
+                "adnxs|" +
+                "adsafeprotected|" +
+                "moatads|" +
+                "amazon-adsystem|" +
+                "yandexadexchange|" +
+                "advertising" +
+                ")(\\.|$)",
+            Pattern.CASE_INSENSITIVE
+        )
+
+        private val PATH_NEEDLE: Pattern = Pattern.compile(
+            "/ads/|/ad/|/advert|/banner|/pagead|/pagead2|" +
+                "doubleclick|googlesyndication|googleadservices|/adservice|" +
+                "prebid|adsystem|adserver|yandex_ad|/adfstat|/adfox|" +
+                "pagead/js|pagead/ads|safe_frame|imasdk|/vast|vast\\.xml|/vmap|" +
+                "video-ad|video_ad|get-video-ad|adsdk|an\\.yandex",
+            Pattern.CASE_INSENSITIVE
+        )
     }
 }
