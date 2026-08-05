@@ -110,6 +110,29 @@ object UrlUtils {
             "ya.ru", "www.ya.ru"
         ) && (path == "/" || path.isEmpty())
         if (isYandexHome) return "https://yandex.ru/search/"
+        // Google click-wrap /url?q=… → real destination for peek preview
+        if (host.contains("google.") && (path == "/url" || path.startsWith("/url"))) {
+            val q = uri.query.orEmpty()
+            fun param(name: String): String? {
+                q.split('&').forEach { part ->
+                    val i = part.indexOf('=')
+                    if (i <= 0) return@forEach
+                    if (part.substring(0, i) != name) return@forEach
+                    return try {
+                        java.net.URLDecoder.decode(part.substring(i + 1), "UTF-8")
+                    } catch (_: Exception) {
+                        part.substring(i + 1)
+                    }
+                }
+                return null
+            }
+            val target = param("q") ?: param("url")
+            if (!target.isNullOrBlank() &&
+                (target.startsWith("http://") || target.startsWith("https://"))
+            ) {
+                return target
+            }
+        }
         return url
     }
 }

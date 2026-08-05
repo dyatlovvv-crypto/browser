@@ -2,6 +2,7 @@ package ru.srr.safari
 
 import android.annotation.SuppressLint
 import android.app.DownloadManager
+import android.content.ClipData
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -14,6 +15,8 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
+import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.PixelCopy
@@ -137,6 +140,16 @@ class MainActivity : AppCompatActivity() {
     private var tabsRestored = false
     private var edgeBack: EdgeBackGesture? = null
     private var addressTabSwipe: AddressTabSwipe? = null
+    private var linkPreviewDialog: android.app.Dialog? = null
+    private var linkDragActive = false
+    private var linkFingerDown = false
+    private var linkDragUrl: String? = null
+    private var linkDragTitle: String? = null
+    private var linkDragChip: View? = null
+    private var linkDragOverlay: android.widget.FrameLayout? = null
+    private var linkTouchRawX = 0f
+    private var linkTouchRawY = 0f
+    private var linkDragStartRawY = 0f
     private var tabsModeLiquid: TabsModeLiquidSwitch? = null
 
     private val SCROLL_BOOT_JS = """
@@ -270,8 +283,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // WebView ignores View padding — shrink via bottomMargin so sticky page
-            // inputs (Google "Ask a question") sit above the address bar.
+            // Floating chrome overlays the page — do not shrink WebView (that left
+            // an opaque page_bg slab under the address bar).
             binding.bottomChrome.post { syncContentAboveChrome() }
             insets
         }
@@ -312,8 +325,55 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        if (linkDragActive) endLinkDrag(showMenu = false)
         captureActiveTabPreview()
         super.onPause()
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // Once drag started, track the finger at Activity level —
+        // WebView often cancels the gesture and stops delivering MOVE.
+        if (linkDragActive) {
+            linkTouchRawX = ev.rawX
+            linkTouchRawY = ev.rawY
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    moveLinkDragChip(ev.rawX, ev.rawY)
+                    // Pull down → hand off to ColorOS Content Portal (system drag).
+                    val dy = ev.rawY - linkDragStartRawY
+                    val portalZoneY = resources.displayMetrics.heightPixels * 0.78f
+                    val downThreshold = 72f * resources.displayMetrics.density
+                    if (dy >= downThreshold || ev.rawY >= portalZoneY) {
+                        handOffToContentPortal()
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    endLinkDrag(showMenu = true)
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    // Cancel without menu if we already handed off; otherwise peek.
+                    if (linkDragActive) endLinkDrag(showMenu = true)
+                    return true
+                }
+            }
+        } else {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    linkFingerDown = true
+                    linkTouchRawX = ev.rawX
+                    linkTouchRawY = ev.rawY
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    linkTouchRawX = ev.rawX
+                    linkTouchRawY = ev.rawY
+                }
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> linkFingerDown = false
+            }
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -369,6 +429,28 @@ class MainActivity : AppCompatActivity() {
             setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
                 enqueueDownload(url, userAgent, contentDisposition, mimeType)
             }
+            isLongClickable = true
+            isHapticFeedbackEnabled = true
+            // Long-press starts drag chip; MOVE/UP handled in dispatchTouchEvent.
+            val linkLongPress = GestureDetector(
+                this@MainActivity,
+                object : GestureDetector.SimpleOnGestureListener() {
+                    override fun onLongPress(e: MotionEvent) {
+                        linkTouchRawX = e.rawX
+                        linkTouchRawY = e.rawY
+                        beginWebLinkDrag()
+                    }
+                }
+            )
+            setOnTouchListener { _, event ->
+                linkLongPress.onTouchEvent(event)
+                // Keep consuming after drag so WebView doesn't navigate/select.
+                linkDragActive
+            }
+            setOnLongClickListener {
+                if (linkDragActive) true else beginWebLinkDrag()
+            }
+            setOnCreateContextMenuListener { menu, _, _ -> menu.clear() }
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                     binding.progress.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
@@ -454,6 +536,7 @@ class MainActivity : AppCompatActivity() {
                     updateChromeForState()
                     injectScrollObserver()
                     injectAdHide(view)
+                    binding.bottomChrome.post { syncContentAboveChrome() }
                     if (!isPrivate) {
                         val title = active.title
                         lifecycleScope.launch { repo.addHistory(title, u) }
@@ -489,6 +572,24 @@ class MainActivity : AppCompatActivity() {
                     // Auto-accept: banks/CDNs often fire several SSL callbacks per page.
                     // User asked to skip the confirm prompt.
                     handler?.proceed()
+                }
+
+                override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                    super.doUpdateVisitedHistory(view, url, isReload)
+                    val u = url.orEmpty()
+                    if (u.isBlank() || u == "about:blank") return
+                    val rewritten = UrlUtils.rewriteKnownRedirects(u)
+                    if (rewritten != u) {
+                        view?.stopLoading()
+                        view?.loadUrl(rewritten)
+                        return
+                    }
+                    // Keep chrome in sync on SPA / History API navigations (Google SERP, etc.)
+                    if (active.url != u) {
+                        active.url = u
+                        active.isStartPage = false
+                        if (!editingAddress) refreshAddressDisplay()
+                    }
                 }
             }
         }
@@ -593,9 +694,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Keep WebView above floating chrome while the bar is visible so sticky page
-     * inputs (Google «Задайте вопрос») aren't under the address capsule.
-     * Full-bleed only when chrome is collapsed / overlays open.
+     * Floating chrome sits over the page (iOS Safari). Never shrink the WebView —
+     * a bottomMargin gap showed an opaque page_bg slab under the address bar.
+     * Soft CSS inset keeps sticky footers clearer of the bar.
      */
     private fun syncContentAboveChrome() {
         val chrome = binding.bottomChrome
@@ -603,22 +704,48 @@ class MainActivity : AppCompatActivity() {
             binding.tabsOverlay.visibility == View.VISIBLE ||
                 binding.historyOverlay.visibility == View.VISIBLE
         val browsing = binding.webView.visibility == View.VISIBLE && !active.isStartPage
-        val reserve = when {
-            overlayOpen -> 0
-            imeVisible -> chrome.height
-            chromeCollapsed -> 0
-            browsing -> chrome.height.coerceAtLeast(1)
-            else -> 0
-        }
         val lp = binding.contentContainer.layoutParams as androidx.constraintlayout.widget.ConstraintLayout.LayoutParams
-        if (lp.bottomMargin != reserve) {
-            lp.bottomMargin = reserve
+        // Full-bleed always — chrome floats above content
+        if (lp.bottomMargin != 0) {
+            lp.bottomMargin = 0
             binding.contentContainer.layoutParams = lp
         }
         // Start page always keeps room so favorites aren't under the address bar
         val startPad = (130 * resources.displayMetrics.density).toInt()
         if (binding.startPage.paddingBottom != startPad) {
             binding.startPage.updatePadding(bottom = startPad)
+        }
+        val insetPx = when {
+            overlayOpen || chromeCollapsed || !browsing || imeVisible -> 0
+            else -> chrome.height.coerceAtLeast(0)
+        }
+        injectChromeBottomInset(insetPx)
+    }
+
+    /** Soft page inset so content can scroll clear of the floating address bar. */
+    private fun injectChromeBottomInset(px: Int) {
+        if (!::binding.isInitialized) return
+        if (binding.webView.visibility != View.VISIBLE) return
+        val cssPx = (px / resources.displayMetrics.density).toInt().coerceAtLeast(0)
+        val js = """
+            (function(){
+              var id = 'srr-chrome-inset';
+              var s = document.getElementById(id);
+              if (!s) {
+                s = document.createElement('style');
+                s.id = id;
+                (document.documentElement || document.head).appendChild(s);
+              }
+              var h = ${cssPx};
+              if (h <= 0) { s.textContent = ''; return; }
+              s.textContent =
+                'html{scroll-padding-bottom:' + h + 'px!important;}' +
+                'body{padding-bottom:' + h + 'px!important;box-sizing:border-box!important;}';
+            })();
+        """.trimIndent()
+        try {
+            binding.webView.evaluateJavascript(js, null)
+        } catch (_: Exception) {
         }
     }
 
@@ -2492,6 +2619,400 @@ class MainActivity : AppCompatActivity() {
     private sealed class HistoryRow {
         data class Header(val key: String, val title: String, val expanded: Boolean) : HistoryRow()
         data class Entry(val item: HistoryEntry, val place: HistoryPlace) : HistoryRow()
+    }
+
+    private fun normalizeHttpLink(raw: String?): String? {
+        var u = raw?.trim().orEmpty()
+        if (u.isEmpty()) return null
+        if (u.startsWith("//")) u = "https:$u"
+        if (!u.startsWith("http://") && !u.startsWith("https://")) {
+            if (u.startsWith("www.")) u = "https://$u" else return null
+        }
+        return UrlUtils.rewriteKnownRedirects(u)
+    }
+
+    /** Long-press: start floating link chip; menu opens on finger release. */
+    private fun beginWebLinkDrag(): Boolean {
+        if (linkDragActive || linkPreviewDialog?.isShowing == true) return true
+        val web = binding.webView
+        val hit = web.hitTestResult
+        val fromHit = when (hit.type) {
+            WebView.HitTestResult.SRC_ANCHOR_TYPE,
+            WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> normalizeHttpLink(hit.extra)
+            else -> null
+        }
+        if (fromHit != null) {
+            startLinkDrag(fromHit, title = UrlUtils.displayHost(fromHit))
+            return true
+        }
+        val handler = Handler(Looper.getMainLooper()) { msg ->
+            val url = normalizeHttpLink(msg.data?.getString("url"))
+            val title = msg.data?.getString("title")?.trim().orEmpty()
+                .ifBlank { url?.let { UrlUtils.displayHost(it) }.orEmpty() }
+            if (url == null) return@Handler true
+            when {
+                linkPreviewDialog?.isShowing == true -> Unit
+                linkDragActive -> Unit
+                linkFingerDown -> startLinkDrag(url, title)
+                else -> showLinkPreview(url)
+            }
+            true
+        }
+        try {
+            web.requestFocusNodeHref(Message.obtain(handler))
+        } catch (_: Exception) {
+            return false
+        }
+        return hit.type == WebView.HitTestResult.UNKNOWN_TYPE ||
+            hit.type == WebView.HitTestResult.SRC_ANCHOR_TYPE ||
+            hit.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE ||
+            hit.type == WebView.HitTestResult.IMAGE_TYPE
+    }
+
+    private fun startLinkDrag(url: String, title: String) {
+        if (linkDragActive) return
+        // Drop orphan overlay from a previous broken session
+        linkDragOverlay?.let { ov ->
+            try {
+                (ov.parent as? android.view.ViewGroup)?.removeView(ov)
+            } catch (_: Exception) {
+            }
+        }
+        linkDragOverlay = null
+        linkDragChip = null
+
+        linkDragActive = true
+        linkDragUrl = url
+        linkDragTitle = title.ifBlank { UrlUtils.displayHost(url) }
+        linkDragStartRawY = linkTouchRawY
+        binding.webView.parent?.requestDisallowInterceptTouchEvent(true)
+        binding.webView.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+
+        val overlay = android.widget.FrameLayout(this).apply {
+            layoutParams = androidx.constraintlayout.widget.ConstraintLayout.LayoutParams(
+                androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.MATCH_PARENT,
+                androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.MATCH_PARENT
+            )
+            elevation = 48f * resources.displayMetrics.density
+            isClickable = false
+            isFocusable = false
+        }
+        val chip = layoutInflater.inflate(R.layout.view_link_drag_chip, overlay, false)
+        chip.findViewById<TextView>(R.id.linkDragTitle).text = linkDragTitle
+        chip.findViewById<TextView>(R.id.linkDragUrl).text = url
+        chip.background = LiquidGlass.menuPopoverDrawable(
+            this,
+            settings.glassOpacity.coerceAtLeast(86),
+            14f,
+            privateMode = isPrivate
+        )
+        chip.clipToOutline = true
+        chip.outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                if (view.width <= 0 || view.height <= 0) return
+                val r = 14f * resources.displayMetrics.density
+                outline.setRoundRect(0, 0, view.width, view.height, r)
+            }
+        }
+        chip.alpha = 0f
+        chip.scaleX = 0.94f
+        chip.scaleY = 0.94f
+        overlay.addView(
+            chip,
+            android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        binding.root.addView(overlay)
+        linkDragOverlay = overlay
+        linkDragChip = chip
+        chip.post {
+            moveLinkDragChip(linkTouchRawX, linkTouchRawY)
+            chip.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(120L).start()
+        }
+    }
+
+    private fun moveLinkDragChip(rawX: Float, rawY: Float) {
+        val chip = linkDragChip ?: return
+        val overlay = linkDragOverlay ?: return
+        if (chip.width <= 0 || chip.height <= 0) {
+            chip.post { moveLinkDragChip(rawX, rawY) }
+            return
+        }
+        val loc = IntArray(2)
+        overlay.getLocationOnScreen(loc)
+        val x = rawX - loc[0] - chip.width / 2f
+        val y = rawY - loc[1] - chip.height - (36f * resources.displayMetrics.density)
+        val maxX = (overlay.width - chip.width - 8f).coerceAtLeast(8f)
+        val maxY = (overlay.height - chip.height - 8f).coerceAtLeast(8f)
+        chip.x = x.coerceIn(8f, maxX)
+        chip.y = y.coerceIn(8f, maxY)
+    }
+
+    private fun endLinkDrag(showMenu: Boolean) {
+        val url = linkDragUrl
+        val wasActive = linkDragActive
+        val chip = linkDragChip
+        val overlay = linkDragOverlay
+        linkDragActive = false
+        linkDragUrl = null
+        linkDragTitle = null
+        linkDragChip = null
+        linkDragOverlay = null
+        binding.webView.parent?.requestDisallowInterceptTouchEvent(false)
+        if (overlay != null) {
+            fun removeOverlay() {
+                try {
+                    (overlay.parent as? android.view.ViewGroup)?.removeView(overlay)
+                } catch (_: Exception) {
+                }
+            }
+            if (chip != null) {
+                chip.animate()
+                    .alpha(0f)
+                    .scaleX(0.96f)
+                    .scaleY(0.96f)
+                    .setDuration(100L)
+                    .withEndAction { removeOverlay() }
+                    .start()
+            } else {
+                removeOverlay()
+            }
+        }
+        if (wasActive && showMenu && !url.isNullOrBlank()) {
+            showLinkPreview(url)
+        }
+    }
+
+    /**
+     * Long-press + pull down → ColorOS Content Portal.
+     * Starts a system drag with the URL so the portal can catch it at the bottom.
+     */
+    private fun handOffToContentPortal() {
+        if (!linkDragActive) return
+        val url = linkDragUrl ?: return
+        val title = linkDragTitle ?: UrlUtils.displayHost(url)
+        val chip = linkDragChip
+        val overlay = linkDragOverlay
+
+        linkDragActive = false
+        linkDragUrl = null
+        linkDragTitle = null
+        linkDragChip = null
+        linkDragOverlay = null
+        binding.webView.parent?.requestDisallowInterceptTouchEvent(false)
+
+        val clip = try {
+            ClipData.newRawUri(title, Uri.parse(url)).also {
+                it.addItem(ClipData.Item(url))
+            }
+        } catch (_: Exception) {
+            ClipData.newPlainText(title, url)
+        }
+        val shadowTarget = chip ?: binding.webView
+        val shadow = View.DragShadowBuilder(shadowTarget)
+        val flags = View.DRAG_FLAG_GLOBAL or
+            View.DRAG_FLAG_GLOBAL_URI_READ or
+            View.DRAG_FLAG_GLOBAL_PREFIX_URI_PERMISSION
+        val started = try {
+            binding.webView.startDragAndDrop(clip, shadow, null, flags)
+        } catch (_: Exception) {
+            false
+        }
+
+        try {
+            (overlay?.parent as? android.view.ViewGroup)?.removeView(overlay)
+        } catch (_: Exception) {
+        }
+
+        if (!started) {
+            // Fallback: at least open the share sheet near portal intent
+            try {
+                startActivity(
+                    Intent.createChooser(
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, url)
+                            putExtra(Intent.EXTRA_SUBJECT, title)
+                        },
+                        "Поделиться"
+                    )
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun showLinkPreview(url: String) {
+        if (url.isBlank() || url == "about:blank") return
+        if (linkPreviewDialog?.isShowing == true) return
+        val dialog = android.app.Dialog(this, R.style.Theme_Safari_LinkPreview)
+        linkPreviewDialog = dialog
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
+        )
+        dialog.window?.setLayout(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        dialog.window?.setDimAmount(0f)
+
+        val sheet = ru.srr.safari.databinding.DialogLinkPreviewBinding.inflate(layoutInflater)
+        val opacity = settings.glassOpacity.coerceAtLeast(84)
+        sheet.linkPreviewCard.background = LiquidGlass.menuPopoverDrawable(
+            this, opacity, 18f, privateMode = isPrivate
+        )
+        sheet.linkPreviewMenu.background = LiquidGlass.menuPopoverDrawable(
+            this, opacity, 14f, privateMode = isPrivate
+        )
+        LiquidGlass.polishCapsule(sheet.linkPreviewCard, 18f, pressFeedback = false)
+        LiquidGlass.polishCapsule(sheet.linkPreviewMenu, 14f, pressFeedback = false)
+        LiquidGlass.polishCapsule(sheet.linkPreviewWebFrame, 12f, pressFeedback = false)
+
+        // Bigger peek (iOS-like), compact menu below
+        val previewH = (resources.displayMetrics.heightPixels * 0.48f).toInt()
+            .coerceIn(
+                (320 * resources.displayMetrics.density).toInt(),
+                (460 * resources.displayMetrics.density).toInt()
+            )
+        sheet.linkPreviewWebFrame.layoutParams =
+            sheet.linkPreviewWebFrame.layoutParams.apply { height = previewH }
+
+        // Hide address chrome — it was showing through the scrim as a dark slab
+        val chromeWasVisible = binding.bottomChrome.visibility == View.VISIBLE
+        binding.bottomChrome.visibility = View.GONE
+
+        val host = UrlUtils.displayHost(url)
+        sheet.linkPreviewHost.text = host
+
+        val preview = sheet.linkPreviewWeb
+        preview.settings.javaScriptEnabled = true
+        preview.settings.domStorageEnabled = true
+        preview.settings.loadWithOverviewMode = true
+        preview.settings.useWideViewPort = true
+        preview.settings.builtInZoomControls = false
+        preview.settings.setSupportZoom(false)
+        preview.settings.userAgentString = binding.webView.settings.userAgentString
+        preview.isLongClickable = false
+        preview.setOnLongClickListener { true }
+        preview.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                return false
+            }
+
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): WebResourceResponse? {
+                if (request != null && adBlocker.shouldBlock(request.url, request.isForMainFrame)) {
+                    return adBlocker.emptyResponse()
+                }
+                return null
+            }
+
+            override fun onPageFinished(view: WebView?, finishedUrl: String?) {
+                sheet.linkPreviewProgress.visibility = View.GONE
+            }
+
+            override fun onReceivedSslError(
+                view: WebView?,
+                handler: SslErrorHandler?,
+                error: SslError?
+            ) {
+                handler?.proceed()
+            }
+        }
+        preview.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                sheet.linkPreviewProgress.visibility =
+                    if (newProgress in 1..99) View.VISIBLE else View.GONE
+            }
+        }
+        preview.loadUrl(url)
+
+        fun dismissAndDestroy() {
+            try {
+                preview.stopLoading()
+                preview.loadUrl("about:blank")
+            } catch (_: Exception) {
+            }
+            dialog.dismiss()
+        }
+
+        sheet.linkPreviewScrim.setOnClickListener { dismissAndDestroy() }
+        sheet.linkPreviewHide.setOnClickListener { dismissAndDestroy() }
+        sheet.linkActionOpen.setOnClickListener {
+            dismissAndDestroy()
+            loadUrl(url)
+        }
+        sheet.linkActionNewTab.setOnClickListener {
+            dismissAndDestroy()
+            openUrlInNewTab(url)
+        }
+        sheet.linkActionCopy.setOnClickListener {
+            val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("url", url))
+            Toast.makeText(this, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
+            dismissAndDestroy()
+        }
+        sheet.linkActionShare.setOnClickListener {
+            dismissAndDestroy()
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, url)
+                putExtra(Intent.EXTRA_SUBJECT, host)
+            }
+            startActivity(Intent.createChooser(send, "Поделиться"))
+        }
+        sheet.linkActionReading.setOnClickListener {
+            lifecycleScope.launch {
+                repo.addBookmark(host, url)
+                Toast.makeText(this@MainActivity, "В списке для чтения", Toast.LENGTH_SHORT).show()
+            }
+            dismissAndDestroy()
+        }
+
+        dialog.setOnDismissListener {
+            if (linkPreviewDialog === dialog) linkPreviewDialog = null
+            if (chromeWasVisible &&
+                binding.tabsOverlay.visibility != View.VISIBLE &&
+                binding.readerOverlay.visibility != View.VISIBLE
+            ) {
+                binding.bottomChrome.visibility = View.VISIBLE
+                syncContentAboveChrome()
+            }
+            try {
+                preview.stopLoading()
+                (preview.parent as? android.view.ViewGroup)?.removeView(preview)
+                preview.destroy()
+            } catch (_: Exception) {
+            }
+        }
+        dialog.setContentView(sheet.root)
+        dialog.show()
+        SafariMotion.appear(
+            sheet.linkPreviewColumn,
+            fromScale = 0.96f,
+            fromY = 12f * resources.displayMetrics.density
+        )
+    }
+
+    private fun openUrlInNewTab(url: String) {
+        captureActiveTabPreview()
+        val tab = Tab(
+            isPrivate = isPrivate,
+            isStartPage = false,
+            url = url,
+            title = UrlUtils.displayHost(url)
+        )
+        tabs.add(tab)
+        activeId = tab.id
+        applyPrivateSettings()
+        updateTabCount()
+        loadUrl(url)
     }
 
     private fun showShareMenu() {
