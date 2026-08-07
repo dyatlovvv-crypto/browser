@@ -135,4 +135,32 @@ object UrlUtils {
         }
         return url
     }
+
+    /**
+     * Domains where we must not inject cosmetics / layout spacers
+     * (Google AI Mode went white; gdebenz has its own page scripts).
+     */
+    fun shouldSkipPageDomScripts(url: String): Boolean {
+        val u = url.lowercase()
+        if (u.isBlank() || u == "about:blank") return true
+        return u.contains("google.") ||
+            u.contains("gstatic.") ||
+            u.contains("youtube.") ||
+            u.contains("youtu.be") ||
+            u.contains("gdebenz.") ||
+            isFragileFullViewportUrl(u)
+    }
+
+    /**
+     * Full-viewport SPAs (Google AI Mode etc.).
+     * udm=50 is AI Mode on mobile Google Search.
+     */
+    fun isFragileFullViewportUrl(url: String): Boolean {
+        val u = url.lowercase()
+        if (!u.contains("google.")) return false
+        return u.contains("udm=50") ||
+            u.contains("udm=51") ||
+            u.contains("udm=14") ||
+            (u.contains("/search") && (u.contains("aichat") || u.contains("ai_chat")))
+    }
 }

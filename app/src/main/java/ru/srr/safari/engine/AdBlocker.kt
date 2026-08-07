@@ -49,7 +49,6 @@ class AdBlocker(context: Context) {
                 "googlesyndication.com",
                 "googleadservices.com",
                 "googletagservices.com",
-                "googletagmanager.com",
                 "adservice.google.com",
                 "adservice.google.ru",
                 "pagead2.googlesyndication.com",
@@ -68,6 +67,9 @@ class AdBlocker(context: Context) {
         val scheme = uri.scheme ?: return false
         if (scheme != "http" && scheme != "https") return false
         val host = uri.host?.lowercase() ?: return false
+        // Never touch Google first-party — AI Mode / SERP hang when /ads/ needles
+        // match legitimate google.com paths or related CDNs.
+        if (isGoogleFirstPartyHost(host)) return false
         if (hostBlocked(host)) return true
         if (HOST_NEEDLE.matcher(host).find()) return true
         val path = uri.encodedPath.orEmpty()
@@ -88,6 +90,20 @@ class AdBlocker(context: Context) {
     fun shouldBlock(url: String?, isMainFrame: Boolean): Boolean {
         if (!enabled || isMainFrame || url.isNullOrBlank()) return false
         return shouldBlock(Uri.parse(url), isMainFrame)
+    }
+
+    private fun isGoogleFirstPartyHost(host: String): Boolean {
+        val h = host.removePrefix("www.")
+        // Explicit allowlist only — do NOT use startsWith("google") (would allow googleadservices).
+        return h == "google.com" || h.endsWith(".google.com") ||
+            h == "google.ru" || h.endsWith(".google.ru") ||
+            h == "google.com.ua" || h.endsWith(".google.com.ua") ||
+            h == "gstatic.com" || h.endsWith(".gstatic.com") ||
+            h == "googleapis.com" || h.endsWith(".googleapis.com") ||
+            h == "googleusercontent.com" || h.endsWith(".googleusercontent.com") ||
+            h == "ggpht.com" || h.endsWith(".ggpht.com") ||
+            h == "googlezip.net" || h.endsWith(".googlezip.net") ||
+            h == "googletagmanager.com" || h.endsWith(".googletagmanager.com")
     }
 
     private fun hostBlocked(host: String): Boolean {

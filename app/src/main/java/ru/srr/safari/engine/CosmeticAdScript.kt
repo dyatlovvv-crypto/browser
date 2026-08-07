@@ -11,7 +11,7 @@ object CosmeticAdScript {
   var s = document.createElement('style');
   s.id = 'srr-ad-hide-css';
   s.textContent = [
-    '#tads,#tadsb,#bottomads,#tvcap,#taw,#rhsads,',
+    '#tads,#tadsb,#bottomads,#rhsads,',
     '[data-text-ad],.commercial-unit-desktop-rhs,.ads-ad,',
     'ins.adsbygoogle,.adsbygoogle,',
     'iframe[src*="doubleclick"],',
@@ -33,16 +33,14 @@ object CosmeticAdScript {
      */
     val JS: String = """
 (function(){
-  if (window.__srrAdCosmetics) {
-    try { if (window.__srrAdSweep) window.__srrAdSweep(); } catch (e) {}
-    return;
-  }
+  // Already armed — do not re-sweep (re-inject after resume used to jank taps).
+  if (window.__srrAdCosmetics) return;
   window.__srrAdCosmetics = true;
 
   function injectCss(){
     if (document.getElementById('srr-ad-cosmetic')) return;
     var css = [
-      '#tads,#tadsb,#bottomads,#tvcap,#taw,#rhsads,',
+      '#tads,#tadsb,#bottomads,#rhsads,',
       '[data-text-ad],.commercial-unit-desktop-rhs,.ads-ad,.cu-container,',
       'div[aria-label="Ads"],div[aria-label="Реклама"],div[aria-label="Соцреклама"],',
       'div[aria-label="Advertisement"],span[aria-label="Реклама"],span[aria-label="Соцреклама"],',
@@ -109,8 +107,8 @@ object CosmeticAdScript {
 
   function hideBadgeChips(){
     if (!document.body) return;
-    var nodes = document.body.querySelectorAll('span,a,small,label,b,i,div');
-    var limit = Math.min(nodes.length, 1200);
+    var nodes = document.body.querySelectorAll('span,a,small,label,b,i');
+    var limit = Math.min(nodes.length, 400);
     var vh = window.innerHeight || 640;
     for (var i = 0; i < limit; i++){
       var el = nodes[i];

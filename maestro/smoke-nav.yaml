@@ -1,0 +1,33 @@
+appId: ru.srr.safari
+---
+# Session-resilient: device may restore last tab; open a fresh start page first.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "btnMore"
+    timeout: 15000
+- tapOn:
+    id: "btnMore"
+- extendedWaitUntil:
+    visible:
+      id: "moreTabs"
+    timeout: 5000
+- assertVisible: "Новая вкладка"
+- assertVisible: "Закладки"
+- tapOn: "Новая вкладка"
+- extendedWaitUntil:
+    visible: "Избранное"
+    timeout: 10000
+- assertVisible:
+    id: "addressBar"
+- tapOn:
+    id: "btnMore"
+- tapOn:
+    id: "moreTabs"
+- extendedWaitUntil:
+    visible: "Готово"
+    timeout: 8000
+- assertVisible:
+    id: "btnNewTab"
+- tapOn: "Готово"
+- assertVisible: "Избранное"
