@@ -1,0 +1,35 @@
+appId: ru.srr.safari
+---
+# Navigate via start-page favorite (ColorOS: Maestro Enter often backgrounds the app).
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "btnMore"
+    timeout: 15000
+- tapOn:
+    id: "btnMore"
+- tapOn: "Новая вкладка"
+- extendedWaitUntil:
+    visible: "Избранное"
+    timeout: 10000
+- assertVisible: "Google"
+- tapOn: "Wikipedia"
+- extendedWaitUntil:
+    visible:
+      id: "bottomChrome"
+    timeout: 20000
+- assertVisible:
+    id: "addressBar"
+- extendedWaitUntil:
+    visible: ".*wikipedia.*"
+    timeout: 20000
+- tapOn:
+    id: "btnMore"
+- extendedWaitUntil:
+    visible: "Поделиться"
+    timeout: 5000
+- assertVisible:
+    id: "moreTabs"
+- back
+- assertVisible:
+    id: "bottomChrome"

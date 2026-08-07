@@ -1,0 +1,24 @@
+appId: ru.srr.safari
+---
+# After scripts/ux-smoke.sh seeds weather SERP and CDP-clicks «Режим ИИ».
+# Assert OUR app stays interactive (freeze regression) and not a white sheet.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "bottomChrome"
+    timeout: 20000
+- assertVisible:
+    id: "addressBar"
+- assertVisible:
+    id: "btnMore"
+# Chrome must respond after AI Mode navigation
+- tapOn:
+    id: "btnMore"
+- extendedWaitUntil:
+    visible: "Поделиться"
+    timeout: 8000
+- back
+- assertVisible:
+    id: "bottomChrome"
+- assertVisible:
+    id: "btnMore"

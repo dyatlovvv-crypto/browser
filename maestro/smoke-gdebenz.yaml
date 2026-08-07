@@ -1,0 +1,15 @@
+appId: ru.srr.safari
+---
+# Seeded by scripts/ux-smoke.sh via am start -n ru.srr.safari/.MainActivity (never Chrome).
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "bottomChrome"
+    timeout: 20000
+- assertVisible:
+    id: "addressBar"
+- assertVisible:
+    id: "btnMore"
+- extendedWaitUntil:
+    visible: ".*gdebenz|.*[Аа]ЗС|.*бенз|.*Бенз|.*цена|.*Цена|.*карт.*"
+    timeout: 35000

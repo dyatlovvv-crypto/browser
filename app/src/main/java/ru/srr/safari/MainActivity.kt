@@ -6,8 +6,6 @@ import android.content.ClipData
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -125,6 +123,7 @@ class MainActivity : AppCompatActivity() {
     private var editingAddress = false
     private var chromeCollapsed = false
     private var lastJsScrollY = 0
+    private var lastJsScrollAtMs = 0L
     private var imeVisible = false
     private var suggestionsExpanded = false
     private var favoritesEditing = false
@@ -151,10 +150,25 @@ class MainActivity : AppCompatActivity() {
     private var linkTouchRawY = 0f
     private var linkDragStartRawY = 0f
     private var tabsModeLiquid: TabsModeLiquidSwitch? = null
+    private var googleAiDialog: android.app.Dialog? = null
+    private var googleAiWebView: WebView? = null
+    private var openingGoogleAi = false
 
     private val SCROLL_BOOT_JS = """
             (function(){
               if (window.__safariScrollHooked) return;
+              function host(){
+                try { return (location.hostname || '').toLowerCase(); } catch (e) { return ''; }
+              }
+              function banned(h){
+                // Empty host at document-start: do NOT hook — page may be Google AI Mode.
+                if (!h) return true;
+                return h.indexOf('google.') >= 0 || h.indexOf('gstatic.') >= 0 ||
+                  h.indexOf('youtube.') >= 0 || h.indexOf('youtu.be') >= 0 ||
+                  h.indexOf('gdebenz.') >= 0;
+              }
+              var h = host();
+              if (banned(h)) return;
               window.__safariScrollHooked = true;
               var last = 0;
               var ticking = false;
@@ -302,6 +316,7 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
+                    googleAiDialog?.isShowing == true -> dismissGoogleAiModeDialog()
                     binding.historyOverlay.visibility == View.VISIBLE -> hideHistory()
                     binding.tabsOverlay.visibility == View.VISIBLE -> hideTabs()
                     binding.readerOverlay.visibility == View.VISIBLE -> closeReader()
@@ -326,8 +341,22 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         if (linkDragActive) endLinkDrag(showMenu = false)
-        captureActiveTabPreview()
+        previewCaptureRunnable?.let { previewHandler.removeCallbacks(it) }
+        try {
+            // Do not pauseTimers() — freezes Google AI / SPA JS and can leave a white sheet.
+            binding.webView.onPause()
+        } catch (_: Exception) {
+        }
         super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        try {
+            binding.webView.onResume()
+            binding.webView.post { binding.webView.invalidate() }
+        } catch (_: Exception) {
+        }
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
@@ -396,33 +425,30 @@ class MainActivity : AppCompatActivity() {
             WebView.setWebContentsDebuggingEnabled(true)
         }
         binding.webView.apply {
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            // Window is already HA; extra HW layer goes stale after idle and lags first taps.
+            setLayerType(View.LAYER_TYPE_NONE, null)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
             settings.builtInZoomControls = true
             settings.displayZoomControls = false
+            // window.open popups: keep off — orphan popup WebViews wedge AI Mode paint on ColorOS.
             settings.setSupportMultipleWindows(false)
+            settings.javaScriptCanOpenWindowsAutomatically = false
             settings.allowFileAccess = true
             settings.allowContentAccess = true
             settings.mediaPlaybackRequiresUserGesture = true
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             settings.textZoom = this@MainActivity.settings.textZoom
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                settings.offscreenPreRaster = true
+                settings.offscreenPreRaster = false
             }
             applyUserAgent()
             addJavascriptInterface(ScrollBridge(), "SafariChrome")
-            try {
-                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
-                    this,
-                    CosmeticAdScript.JS + "\n" + SCROLL_BOOT_JS,
-                    setOf("*")
-                )
-            } catch (_: Throwable) {
-                // Older WebView — fall back to onPageFinished inject
-            }
+            // Do NOT use addDocumentStartJavaScript for scroll — at document-start
+            // hostname can be empty and the hook was installing on Google AI Mode,
+            // freezing the ColorOS compositor (DOM updates, pixels stay on SERP).
             setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
                 onContentScroll(scrollY - oldScrollY, scrollY)
             }
@@ -501,6 +527,14 @@ class MainActivity : AppCompatActivity() {
                         view?.loadUrl(rewritten)
                         return true
                     }
+                    // Google «Режим ИИ» — open in a clean dialog WebView. In-tab SPA freezes
+                    // the ColorOS compositor (DOM updates, pixels stay on SERP).
+                    if (UrlUtils.isFragileFullViewportUrl(u) &&
+                        !UrlUtils.isFragileFullViewportUrl(active.url)
+                    ) {
+                        openGoogleAiModeDialog(u)
+                        return true
+                    }
                     return false
                 }
 
@@ -522,6 +556,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     showWeb()
                     setChromeCollapsed(false)
+                    applyWebViewLayerForUrl(u)
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
@@ -534,14 +569,19 @@ class MainActivity : AppCompatActivity() {
                     hideSuggestions()
                     if (!editingAddress) refreshAddressDisplay()
                     updateChromeForState()
-                    injectScrollObserver()
+                    if (!UrlUtils.shouldSkipPageDomScripts(u)) {
+                        injectScrollObserver()
+                    }
                     injectAdHide(view)
                     binding.bottomChrome.post { syncContentAboveChrome() }
                     if (!isPrivate) {
                         val title = active.title
                         lifecycleScope.launch { repo.addHistory(title, u) }
                     }
-                    scheduleTabPreviewCapture()
+                    // PixelCopy during Google AI SPA paint freezes the WebView surface on ColorOS.
+                    if (!UrlUtils.shouldSkipPageDomScripts(u)) {
+                        scheduleTabPreviewCapture()
+                    }
                 }
 
                 override fun onReceivedError(
@@ -584,11 +624,25 @@ class MainActivity : AppCompatActivity() {
                         view?.loadUrl(rewritten)
                         return
                     }
-                    // Keep chrome in sync on SPA / History API navigations (Google SERP, etc.)
                     if (active.url != u) {
+                        val becameAi = UrlUtils.isFragileFullViewportUrl(u) &&
+                            !UrlUtils.isFragileFullViewportUrl(active.url)
+                        if (becameAi) {
+                            // SPA path (no shouldOverrideUrlLoading) — same ColorOS freeze.
+                            openGoogleAiModeDialog(u)
+                            view?.post {
+                                when {
+                                    view.canGoBack() -> view.goBack()
+                                    active.url.isNotBlank() -> view.loadUrl(active.url)
+                                }
+                            }
+                            return
+                        }
                         active.url = u
                         active.isStartPage = false
                         if (!editingAddress) refreshAddressDisplay()
+                        binding.bottomChrome.post { syncContentAboveChrome() }
+                        applyWebViewLayerForUrl(u)
                     }
                 }
             }
@@ -659,6 +713,10 @@ class MainActivity : AppCompatActivity() {
     private inner class ScrollBridge {
         @android.webkit.JavascriptInterface
         fun onScroll(y: Int) {
+            // Throttle — AI Mode / SERP fire floods of scroll events and starved the UI thread.
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - lastJsScrollAtMs < 48L) return
+            lastJsScrollAtMs = now
             runOnUiThread {
                 val dy = y - lastJsScrollY
                 lastJsScrollY = y
@@ -668,7 +726,113 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun injectScrollObserver() {
+        if (UrlUtils.shouldSkipPageDomScripts(active.url) ||
+            UrlUtils.shouldSkipPageDomScripts(binding.webView.url.orEmpty())
+        ) return
         binding.webView.evaluateJavascript(SCROLL_BOOT_JS, null)
+    }
+
+    /**
+     * ColorOS GPU compositor freezes on Google AI Mode SPA (DOM=AI, pixels=old SERP).
+     * Keep LAYER_TYPE_NONE; AI Mode itself opens in [openGoogleAiModeDialog].
+     */
+    private fun applyWebViewLayerForUrl(url: String) {
+        val wv = binding.webView
+        if (wv.layerType != View.LAYER_TYPE_NONE) {
+            wv.post { wv.setLayerType(View.LAYER_TYPE_NONE, null) }
+        }
+    }
+
+    /**
+     * Google «Режим ИИ» as a fullscreen dialog with a pristine WebView.
+     * In-tab SPA navigation freezes paint on ColorOS WebView 150; a fresh WebView works.
+     */
+    private fun openGoogleAiModeDialog(url: String) {
+        if (openingGoogleAi) return
+        if (googleAiDialog?.isShowing == true) {
+            googleAiWebView?.loadUrl(url)
+            return
+        }
+        openingGoogleAi = true
+        try {
+            val density = resources.displayMetrics.density
+            val root = android.widget.FrameLayout(this)
+            val wv = WebView(this).apply {
+                setLayerType(View.LAYER_TYPE_NONE, null)
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.userAgentString = binding.webView.settings.userAgentString
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): Boolean {
+                        val u = request?.url?.toString().orEmpty()
+                        if (u.startsWith("http")) return false
+                        return true
+                    }
+                }
+                webChromeClient = WebChromeClient()
+            }
+            googleAiWebView = wv
+            root.addView(
+                wv,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+            val close = android.widget.ImageButton(this).apply {
+                setImageResource(R.drawable.ic_close)
+                contentDescription = "Закрыть"
+                setBackgroundResource(R.drawable.bg_circle_glass)
+                setOnClickListener { dismissGoogleAiModeDialog() }
+                elevation = 8f * density
+            }
+            val closeSize = (44 * density).toInt()
+            val pad = (12 * density).toInt()
+            val statusTop = ViewCompat.getRootWindowInsets(binding.root)
+                ?.getInsets(WindowInsetsCompat.Type.statusBars())?.top ?: 0
+            root.addView(
+                close,
+                android.widget.FrameLayout.LayoutParams(closeSize, closeSize).apply {
+                    gravity = android.view.Gravity.TOP or android.view.Gravity.END
+                    topMargin = pad + statusTop
+                    marginEnd = pad
+                }
+            )
+            val dialog = android.app.Dialog(
+                this,
+                android.R.style.Theme_DeviceDefault_Light_NoActionBar_Fullscreen
+            )
+            dialog.setContentView(root)
+            dialog.setOnDismissListener {
+                try {
+                    wv.stopLoading()
+                    wv.loadUrl("about:blank")
+                    wv.destroy()
+                } catch (_: Exception) {
+                }
+                googleAiWebView = null
+                googleAiDialog = null
+                openingGoogleAi = false
+            }
+            googleAiDialog = dialog
+            dialog.show()
+            wv.loadUrl(url)
+        } catch (_: Exception) {
+            openingGoogleAi = false
+        }
+    }
+
+    private fun dismissGoogleAiModeDialog() {
+        googleAiDialog?.dismiss()
+        googleAiDialog = null
+        googleAiWebView = null
+        openingGoogleAi = false
     }
 
     private fun onContentScroll(dy: Int, scrollY: Int) {
@@ -694,58 +858,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Floating chrome sits over the page (iOS Safari). Never shrink the WebView —
-     * a bottomMargin gap showed an opaque page_bg slab under the address bar.
-     * Soft CSS inset keeps sticky footers clearer of the bar.
+     * Floating chrome sits over the page (iOS Safari). Never shrink the WebView /
+     * inject DOM layout hacks — those blanked Google AI Mode and other SPAs.
      */
     private fun syncContentAboveChrome() {
-        val chrome = binding.bottomChrome
-        val overlayOpen =
-            binding.tabsOverlay.visibility == View.VISIBLE ||
-                binding.historyOverlay.visibility == View.VISIBLE
-        val browsing = binding.webView.visibility == View.VISIBLE && !active.isStartPage
         val lp = binding.contentContainer.layoutParams as androidx.constraintlayout.widget.ConstraintLayout.LayoutParams
-        // Full-bleed always — chrome floats above content
         if (lp.bottomMargin != 0) {
             lp.bottomMargin = 0
             binding.contentContainer.layoutParams = lp
         }
-        // Start page always keeps room so favorites aren't under the address bar
         val startPad = (130 * resources.displayMetrics.density).toInt()
         if (binding.startPage.paddingBottom != startPad) {
             binding.startPage.updatePadding(bottom = startPad)
-        }
-        val insetPx = when {
-            overlayOpen || chromeCollapsed || !browsing || imeVisible -> 0
-            else -> chrome.height.coerceAtLeast(0)
-        }
-        injectChromeBottomInset(insetPx)
-    }
-
-    /** Soft page inset so content can scroll clear of the floating address bar. */
-    private fun injectChromeBottomInset(px: Int) {
-        if (!::binding.isInitialized) return
-        if (binding.webView.visibility != View.VISIBLE) return
-        val cssPx = (px / resources.displayMetrics.density).toInt().coerceAtLeast(0)
-        val js = """
-            (function(){
-              var id = 'srr-chrome-inset';
-              var s = document.getElementById(id);
-              if (!s) {
-                s = document.createElement('style');
-                s.id = id;
-                (document.documentElement || document.head).appendChild(s);
-              }
-              var h = ${cssPx};
-              if (h <= 0) { s.textContent = ''; return; }
-              s.textContent =
-                'html{scroll-padding-bottom:' + h + 'px!important;}' +
-                'body{padding-bottom:' + h + 'px!important;box-sizing:border-box!important;}';
-            })();
-        """.trimIndent()
-        try {
-            binding.webView.evaluateJavascript(js, null)
-        } catch (_: Exception) {
         }
     }
 
@@ -1195,8 +1319,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupEdgeBackGesture() {
         edgeBack?.detach()
+        // Overlay on contentContainer (FrameLayout) — must NOT steal WebView taps
+        // on Google «Режим ИИ» (left-edge tab).
         edgeBack = EdgeBackGesture(
-            touchTarget = binding.webView,
+            parent = binding.contentContainer,
             slideTarget = binding.contentContainer,
             underlay = binding.wallpaperView,
             canGoBack = {
@@ -1286,8 +1412,10 @@ class MainActivity : AppCompatActivity() {
         adBlocker.enabled = settings.adBlockEnabled
         if (!active.isStartPage && active.url.isNotBlank()) {
             if (settings.adBlockEnabled) {
-                binding.webView.evaluateJavascript(CosmeticAdScript.HIDE_CSS_JS, null)
-                binding.webView.evaluateJavascript(CosmeticAdScript.JS, null)
+                if (!UrlUtils.shouldSkipPageDomScripts(active.url)) {
+                    binding.webView.evaluateJavascript(CosmeticAdScript.HIDE_CSS_JS, null)
+                    binding.webView.evaluateJavascript(CosmeticAdScript.JS, null)
+                }
             } else {
                 binding.webView.evaluateJavascript(CosmeticAdScript.REMOVE_JS, null)
             }
@@ -1827,15 +1955,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun newTab(private: Boolean) {
-        captureActiveTabPreview()
-        val tab = Tab(isPrivate = private)
-        tabs.add(tab)
-        activeId = tab.id
-        isPrivate = private
-        applyPrivateSettings()
-        updateTabCount()
-        hideTabs()
-        showStartPage()
+        snapshotActiveTabThen {
+            val tab = Tab(isPrivate = private)
+            tabs.add(tab)
+            activeId = tab.id
+            isPrivate = private
+            applyPrivateSettings()
+            updateTabCount()
+            hideTabs()
+            showStartPage()
+        }
     }
 
     private fun closeTab(id: String) {
@@ -1872,17 +2001,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectTab(id: String) {
-        if (id != activeId) {
-            // Snapshot current page before replacing WebView content
-            captureActiveTabPreview()
+        fun apply() {
+            activeId = id
+            val tab = active
+            isPrivate = tab.isPrivate
+            applyPrivateUi()
+            hideTabs()
+            if (tab.isStartPage || tab.url.isBlank() || tab.url == "about:blank") showStartPage()
+            else loadUrl(tab.url)
         }
-        activeId = id
-        val tab = active
-        isPrivate = tab.isPrivate
-        applyPrivateUi()
-        hideTabs()
-        if (tab.isStartPage || tab.url.isBlank() || tab.url == "about:blank") showStartPage()
-        else loadUrl(tab.url)
+        if (id != activeId) {
+            snapshotActiveTabThen { apply() }
+        } else {
+            apply()
+        }
     }
 
     /** Switch All ↔ Private while staying in the tab overview (iOS swipe). */
@@ -2244,6 +2376,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scheduleTabPreviewCapture() {
+        if (UrlUtils.shouldSkipPageDomScripts(active.url)) return
         previewCaptureRunnable?.let { previewHandler.removeCallbacks(it) }
         val tabId = activeId
         val run = Runnable {
@@ -2253,36 +2386,37 @@ class MainActivity : AppCompatActivity() {
         previewHandler.postDelayed(run, 450L)
     }
 
-    private fun captureActiveTabPreview() {
-        val wv = binding.webView
-        val tabId = activeId
-        if (active.isStartPage || wv.width < 2 || wv.height < 2) return
-        // May be briefly GONE during transitions — still try if laid out
-        try {
-            val targetW = 360
-            val targetH = (360f * wv.height / wv.width).toInt().coerceIn(200, 640)
-            val scaled = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(scaled)
-            canvas.drawColor(Color.WHITE)
-            val scaleX = targetW.toFloat() / wv.width
-            val scaleY = targetH.toFloat() / wv.height
-            canvas.save()
-            canvas.scale(scaleX, scaleY)
-            wv.draw(canvas)
-            canvas.restore()
-            if (!isUselessCapture(scaled)) {
-                storeTabPreview(tabId, scaled)
-            } else {
-                scaled.recycle()
-            }
-        } catch (_: Exception) {
+    /** PixelCopy (+ short fallback) before replacing WebView content — no sync draw. */
+    private fun snapshotActiveTabThen(action: () -> Unit) {
+        var done = false
+        fun go() {
+            if (done) return
+            done = true
+            action()
         }
+        if (active.isStartPage || binding.webView.width < 2 || binding.webView.height < 2) {
+            go()
+            return
+        }
+        // Never PixelCopy Google — freezes AI Mode compositor on OPPO/ColorOS.
+        if (UrlUtils.shouldSkipPageDomScripts(active.url)) {
+            go()
+            return
+        }
+        captureActiveTabPreviewAsync { go() }
+        previewHandler.postDelayed({ go() }, 120L)
     }
 
     private fun captureActiveTabPreviewAsync(onDone: (() -> Unit)? = null) {
         val wv = binding.webView
         val tabId = activeId
         if (active.isStartPage || wv.width < 2 || wv.height < 2) {
+            onDone?.invoke()
+            return
+        }
+        if (UrlUtils.shouldSkipPageDomScripts(active.url) ||
+            UrlUtils.shouldSkipPageDomScripts(wv.url.orEmpty())
+        ) {
             onDone?.invoke()
             return
         }
@@ -3001,18 +3135,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openUrlInNewTab(url: String) {
-        captureActiveTabPreview()
-        val tab = Tab(
-            isPrivate = isPrivate,
-            isStartPage = false,
-            url = url,
-            title = UrlUtils.displayHost(url)
-        )
-        tabs.add(tab)
-        activeId = tab.id
-        applyPrivateSettings()
-        updateTabCount()
-        loadUrl(url)
+        snapshotActiveTabThen {
+            val tab = Tab(
+                isPrivate = isPrivate,
+                isStartPage = false,
+                url = url,
+                title = UrlUtils.displayHost(url)
+            )
+            tabs.add(tab)
+            activeId = tab.id
+            applyPrivateSettings()
+            updateTabCount()
+            loadUrl(url)
+        }
     }
 
     private fun showShareMenu() {

@@ -1,0 +1,32 @@
+appId: ru.srr.safari
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "btnMore"
+    timeout: 15000
+- tapOn:
+    id: "btnMore"
+- tapOn: "Новая вкладка"
+- extendedWaitUntil:
+    visible: "Избранное"
+    timeout: 10000
+- tapOn:
+    id: "btnMore"
+- tapOn:
+    id: "moreTabs"
+- extendedWaitUntil:
+    visible:
+      id: "btnNewTab"
+    timeout: 8000
+- tapOn:
+    id: "btnNewTab"
+- extendedWaitUntil:
+    visible: "Избранное"
+    timeout: 8000
+- tapOn:
+    id: "btnMore"
+- tapOn:
+    id: "moreTabs"
+- tapOn: "Готово"
+- assertVisible: "Избранное"

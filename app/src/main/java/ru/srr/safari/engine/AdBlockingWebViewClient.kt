@@ -39,6 +39,9 @@ open class AdBlockingWebViewClient(
     /** CSS hide + cosmetic sweep. Safe to call multiple times. */
     protected fun injectAdHide(view: WebView?) {
         if (view == null || !adBlocker.enabled) return
+        val url = view.url.orEmpty()
+        // Google / gdebenz / other fragile SPAs — cosmetics blanked AI Mode
+        if (UrlUtils.shouldSkipPageDomScripts(url)) return
         view.evaluateJavascript(CosmeticAdScript.HIDE_CSS_JS, null)
         view.evaluateJavascript(CosmeticAdScript.JS, null)
     }
