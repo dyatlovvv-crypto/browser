@@ -45,16 +45,16 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:paddingHorizontal="20dp"
-                android:paddingTop="20dp"
-                android:paddingBottom="130dp">
+                android:paddingHorizontal="@dimen/safari_space_md"
+                android:paddingTop="@dimen/safari_space_md"
+                android:paddingBottom="128dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
-                    android:layout_marginTop="8dp">
+                    android:layout_marginTop="@dimen/safari_space_sm">
 
                     <TextView
                         android:id="@+id/startTitle"
@@ -62,34 +62,34 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="Избранное"
+                        android:textAppearance="@style/TextAppearance.Safari.TitleLarge"
                         android:textColor="@color/safari_start_title"
-                        android:textSize="28sp"
                         android:textStyle="bold" />
 
                     <TextView
                         android:id="@+id/btnCollapseFav"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:padding="8dp"
+                        android:padding="@dimen/safari_space_sm"
                         android:text="Изменить"
-                        android:textColor="@color/safari_start_muted"
-                        android:textSize="15sp" />
+                        android:textAppearance="@style/TextAppearance.Safari.BodyMedium"
+                        android:textColor="@color/safari_start_muted" />
                 </LinearLayout>
 
                 <TextView
                     android:id="@+id/startSubtitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
+                    android:layout_marginTop="@dimen/safari_space_xs"
+                    android:textAppearance="@style/TextAppearance.Safari.LabelSmall"
                     android:textColor="@color/safari_start_muted"
-                    android:textSize="14sp"
                     android:visibility="gone" />
 
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/favoritesList"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
+                    android:layout_marginTop="@dimen/safari_space_md"
                     android:nestedScrollingEnabled="false"
                     android:overScrollMode="never" />
 
@@ -97,7 +97,7 @@
                     android:id="@+id/recentHeaderRow"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="28dp"
+                    android:layout_marginTop="@dimen/safari_space_lg"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
@@ -108,28 +108,26 @@
                         android:layout_weight="1"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:text="Предложения ▾"
-                        android:textColor="@color/safari_start_title"
-                        android:textSize="22sp"
-                        android:textStyle="bold" />
+                        android:textAppearance="@style/TextAppearance.Safari.TitleLarge"
+                        android:textColor="@color/safari_start_title" />
 
                     <TextView
                         android:id="@+id/btnAllHistory"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:background="?attr/selectableItemBackgroundBorderless"
-                        android:paddingHorizontal="8dp"
-                        android:paddingVertical="6dp"
+                        android:paddingHorizontal="@dimen/safari_space_sm"
+                        android:paddingVertical="@dimen/safari_space_xs"
                         android:text="Вся история"
-                        android:textColor="@color/safari_start_title"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
+                        android:textAppearance="@style/TextAppearance.Safari.BodyMedium"
+                        android:textColor="@color/safari_start_title" />
                 </LinearLayout>
 
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/recentList"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="@dimen/safari_space_sm"
                     android:nestedScrollingEnabled="false"
                     android:overScrollMode="never"
                     android:visibility="gone" />
@@ -157,8 +155,8 @@
                     android:id="@+id/historyToolbar"
                     android:layout_width="match_parent"
                     android:layout_height="48dp"
-                    android:layout_marginHorizontal="12dp"
-                    android:layout_marginBottom="4dp"
+                    android:layout_marginHorizontal="@dimen/safari_space_md"
+                    android:layout_marginBottom="@dimen/safari_space_xs"
                     android:background="@drawable/bg_history_toolbar"
                     android:elevation="0dp"
                     android:gravity="center_vertical"
@@ -202,9 +200,9 @@
                     android:layout_weight="1"
                     android:clipToPadding="false"
                     android:overScrollMode="never"
-                    android:paddingHorizontal="16dp"
-                    android:paddingTop="4dp"
-                    android:paddingBottom="100dp" />
+                    android:paddingHorizontal="@dimen/safari_space_md"
+                    android:paddingTop="@dimen/safari_space_xs"
+                    android:paddingBottom="96dp" />
             </LinearLayout>
         </FrameLayout>
 
@@ -223,10 +221,10 @@
                 android:layout_height="match_parent"
                 android:clipToPadding="false"
                 android:overScrollMode="never"
-                android:paddingStart="10dp"
+                android:paddingStart="@dimen/safari_space_sm"
                 android:paddingTop="56dp"
-                android:paddingEnd="10dp"
-                android:paddingBottom="110dp" />
+                android:paddingEnd="@dimen/safari_space_sm"
+                android:paddingBottom="112dp" />
 
             <!-- Empty private browsing education (iOS-like) -->
             <LinearLayout
@@ -235,7 +233,7 @@
                 android:layout_height="match_parent"
                 android:gravity="center_horizontal"
                 android:orientation="vertical"
-                android:paddingHorizontal="36dp"
+                android:paddingHorizontal="@dimen/safari_space_xl"
                 android:paddingTop="120dp"
                 android:paddingBottom="120dp"
                 android:visibility="gone">
@@ -249,21 +247,20 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="18dp"
+                    android:layout_marginTop="@dimen/safari_space_md"
                     android:text="Частный доступ"
-                    android:textColor="@color/safari_text"
-                    android:textSize="22sp"
-                    android:textStyle="bold" />
+                    android:textAppearance="@style/TextAppearance.Safari.TitleLarge"
+                    android:textColor="@color/safari_on_surface" />
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
+                    android:layout_marginTop="@dimen/safari_space_sm"
                     android:gravity="center"
-                    android:lineSpacingExtra="3dp"
+                    android:lineSpacingExtra="@dimen/safari_space_xs"
                     android:text="В режиме «Частный доступ» Safari не сохраняет историю, данные поиска и автозаполнения после закрытия вкладок."
-                    android:textColor="@color/safari_muted"
-                    android:textSize="15sp" />
+                    android:textAppearance="@style/TextAppearance.Safari.BodyMedium"
+                    android:textColor="@color/safari_muted" />
             </LinearLayout>
 
             <ImageButton
@@ -399,8 +396,8 @@
         android:elevation="0dp"
         android:gravity="center_vertical"
         android:orientation="vertical"
-        android:paddingHorizontal="12dp"
-        android:paddingTop="8dp"
+        android:paddingHorizontal="@dimen/safari_space_md"
+        android:paddingTop="@dimen/safari_space_sm"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
@@ -438,7 +435,7 @@
                 android:id="@+id/addressCapsule"
                 android:layout_width="0dp"
                 android:layout_height="44dp"
-                android:layout_marginHorizontal="8dp"
+                android:layout_marginHorizontal="@dimen/safari_space_sm"
                 android:layout_weight="1"
                 android:background="@drawable/bg_capsule_glass"
                 android:elevation="0dp"

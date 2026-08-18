@@ -4,26 +4,26 @@
     android:layout_height="wrap_content"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingHorizontal="16dp"
-    android:paddingVertical="11dp">
+    android:paddingHorizontal="@dimen/safari_space_md"
+    android:paddingVertical="@dimen/safari_space_md">
 
     <ImageView
         android:layout_width="17dp"
         android:layout_height="17dp"
         android:contentDescription="@null"
         android:src="@drawable/ic_search"
-        android:tint="@color/safari_muted" />
+        android:tint="@color/safari_on_primary_container" />
 
     <TextView
         android:id="@+id/itemTitle"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
+        android:layout_marginStart="@dimen/safari_space_md"
         android:layout_weight="1"
         android:ellipsize="end"
         android:maxLines="1"
-        android:textColor="@color/safari_text"
-        android:textSize="16sp" />
+        android:textAppearance="@style/TextAppearance.Safari.BodyMedium"
+        android:textColor="@color/safari_on_surface" />
 
     <TextView
         android:id="@+id/itemSubtitle"

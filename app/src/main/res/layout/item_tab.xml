@@ -3,41 +3,43 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:paddingHorizontal="6dp"
-    android:paddingBottom="14dp">
+    android:paddingHorizontal="@dimen/safari_space_xs"
+    android:paddingBottom="@dimen/safari_space_md">
 
     <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="210dp"
+        android:layout_height="192dp"
         android:background="@drawable/bg_tab_card"
-        android:elevation="0dp">
+        android:elevation="@dimen/safari_elevation_card">
 
         <ImageView
             android:id="@+id/tabPreview"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="@color/safari_glass_preview"
+            android:background="@color/safari_surface"
             android:contentDescription="@null"
             android:scaleType="centerCrop" />
 
         <ImageView
             android:id="@+id/tabPlaceholder"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:layout_gravity="center"
+            android:background="@drawable/bg_icon_container"
             android:contentDescription="@null"
+            android:padding="@dimen/safari_space_sm"
             android:src="@drawable/ic_tab_compass"
             android:visibility="gone" />
 
         <ImageButton
             android:id="@+id/tabCardClose"
-            android:layout_width="26dp"
-            android:layout_height="26dp"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:layout_gravity="top|end"
-            android:layout_margin="8dp"
+            android:layout_margin="@dimen/safari_space_sm"
             android:background="@drawable/bg_tab_close"
             android:contentDescription="Закрыть"
-            android:padding="6dp"
+            android:padding="@dimen/safari_space_sm"
             android:scaleType="centerInside"
             android:src="@drawable/ic_tab_close" />
     </FrameLayout>
@@ -45,31 +47,31 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="7dp"
+        android:layout_marginTop="@dimen/safari_space_sm"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="2dp">
+        android:paddingHorizontal="@dimen/safari_space_xs">
 
         <TextView
             android:id="@+id/tabFavicon"
-            android:layout_width="16dp"
-            android:layout_height="16dp"
-            android:background="@drawable/bg_tabs_circle"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:background="@drawable/bg_icon_container"
             android:gravity="center"
             android:text="S"
-            android:textColor="#3C3C43"
-            android:textSize="9sp"
+            android:textColor="@color/safari_on_primary_container"
+            android:textSize="11sp"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/tabCardTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
+            android:layout_marginStart="@dimen/safari_space_sm"
             android:layout_weight="1"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="@color/safari_text"
-            android:textSize="12sp" />
+            android:textAppearance="@style/TextAppearance.Safari.LabelSmall"
+            android:textColor="@color/safari_on_surface" />
     </LinearLayout>
 </LinearLayout>

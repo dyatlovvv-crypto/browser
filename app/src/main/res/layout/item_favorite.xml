@@ -4,11 +4,11 @@
     android:layout_height="wrap_content"
     android:gravity="center_horizontal"
     android:orientation="vertical"
-    android:padding="6dp">
+    android:padding="@dimen/safari_space_sm">
 
     <FrameLayout
-        android:layout_width="62dp"
-        android:layout_height="62dp">
+        android:layout_width="56dp"
+        android:layout_height="56dp">
 
         <FrameLayout
             android:id="@+id/favTile"
@@ -21,20 +21,20 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:gravity="center"
-                android:textColor="#FFFFFF"
-                android:textSize="24sp"
+                android:textColor="@color/safari_on_primary_container"
+                android:textSize="22sp"
                 android:textStyle="bold" />
         </FrameLayout>
 
         <TextView
             android:id="@+id/favDelete"
-            android:layout_width="22dp"
-            android:layout_height="22dp"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
             android:layout_gravity="top|start"
             android:background="@drawable/bg_fav_delete"
             android:gravity="center"
             android:text="−"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/safari_white"
             android:textSize="16sp"
             android:textStyle="bold"
             android:visibility="gone" />
@@ -44,10 +44,10 @@
         android:id="@+id/favTitle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="7dp"
+        android:layout_marginTop="@dimen/safari_space_sm"
         android:ellipsize="end"
         android:gravity="center"
         android:maxLines="2"
-        android:textColor="#F2FFFFFF"
-        android:textSize="11sp" />
+        android:textAppearance="@style/TextAppearance.Safari.LabelSmall"
+        android:textColor="@color/safari_start_title" />
 </LinearLayout>

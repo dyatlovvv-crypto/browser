@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="safari_space_xs">4dp</dimen>
+    <dimen name="safari_space_sm">8dp</dimen>
+    <dimen name="safari_space_md">16dp</dimen>
+    <dimen name="safari_space_lg">24dp</dimen>
+    <dimen name="safari_space_xl">32dp</dimen>
+    <dimen name="safari_radius_card">20dp</dimen>
+    <dimen name="safari_elevation_card">2dp</dimen>
+</resources>

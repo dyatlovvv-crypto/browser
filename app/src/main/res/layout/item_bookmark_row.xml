@@ -10,7 +10,7 @@
         android:background="?attr/selectableItemBackground"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="14dp">
+        android:paddingHorizontal="@dimen/safari_space_md">
 
         <ImageView
             android:layout_width="18dp"
@@ -22,11 +22,11 @@
             android:id="@+id/bookmarkTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
+            android:layout_marginStart="@dimen/safari_space_sm"
             android:layout_weight="1"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="@color/safari_text"
-            android:textSize="15sp" />
+            android:textAppearance="@style/TextAppearance.Safari.BodyMedium"
+            android:textColor="@color/safari_on_surface" />
     </LinearLayout>
 </FrameLayout>

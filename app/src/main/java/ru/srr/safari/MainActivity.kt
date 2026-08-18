@@ -91,6 +91,7 @@ import ru.srr.safari.ui.GlassSheet
 import ru.srr.safari.ui.LiquidGlass
 import ru.srr.safari.ui.SafariMotion
 import ru.srr.safari.ui.TabsModeLiquidSwitch
+import ru.srr.safari.ui.theme.SafariSpace
 import androidx.dynamicanimation.animation.SpringForce
 import java.io.File
 import java.io.FileOutputStream
@@ -867,7 +868,7 @@ class MainActivity : AppCompatActivity() {
             lp.bottomMargin = 0
             binding.contentContainer.layoutParams = lp
         }
-        val startPad = (130 * resources.displayMetrics.density).toInt()
+        val startPad = (SafariSpace.xl * 4 * resources.displayMetrics.density).toInt()
         if (binding.startPage.paddingBottom != startPad) {
             binding.startPage.updatePadding(bottom = startPad)
         }
