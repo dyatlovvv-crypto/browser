@@ -16,4 +16,6 @@
     <dimen name="safari_chrome_icon">28dp</dimen>
     <dimen name="safari_elevation_card">2dp</dimen>
     <dimen name="safari_glass_stroke">1dp</dimen>
+    <dimen name="safari_glass_blur">28dp</dimen>
+    <dimen name="safari_glass_body_alpha_pct">66</dimen>
 </resources>

@@ -92,6 +92,7 @@ import ru.srr.safari.ui.LiquidGlass
 import ru.srr.safari.ui.SafariMotion
 import ru.srr.safari.ui.TabsModeLiquidSwitch
 import ru.srr.safari.ui.theme.SafariChrome
+import ru.srr.safari.ui.theme.SafariGlass
 import ru.srr.safari.ui.theme.SafariRadii
 import ru.srr.safari.ui.theme.SafariSpace
 import androidx.dynamicanimation.animation.SpringForce
@@ -188,6 +189,61 @@ class MainActivity : AppCompatActivity() {
               document.addEventListener('scroll', function(){
                 if (!ticking) { ticking = true; requestAnimationFrame(report); }
               }, {passive:true, capture:true});
+            })();
+        """.trimIndent()
+
+    /** Soft-frost Google AI Mode DOM so page glass shows through (throttled, dialog WebView only). */
+    private val AI_MODE_GLASS_JS = """
+            (function(){
+              if (window.__safariAiGlass) return;
+              window.__safariAiGlass = true;
+              var css = document.createElement('style');
+              css.id = 'safari-ai-glass';
+              css.textContent = [
+                'html,body{background:transparent!important;background-color:rgba(238,240,245,0.22)!important;}',
+                'body{color:inherit;}',
+                'textarea,input[type=text],input[type=search]{',
+                'background:linear-gradient(180deg,rgba(255,255,255,0.72),rgba(236,239,246,0.48))!important;',
+                'border:1px solid rgba(255,255,255,0.7)!important;border-radius:24px!important;',
+                'backdrop-filter:blur(20px)!important;-webkit-backdrop-filter:blur(20px)!important;}',
+                'svg,button svg,[role=button] svg{opacity:0.7!important;fill:rgba(28,28,30,0.55)!important;color:rgba(28,28,30,0.55)!important;}'
+              ].join('');
+              (document.head||document.documentElement).appendChild(css);
+              var last = 0;
+              function frost(){
+                var now = Date.now();
+                if (now - last < 400) return;
+                last = now;
+                var nodes = document.querySelectorAll('div,section,header,footer,main,form,article');
+                for (var i = 0; i < nodes.length; i++) {
+                  var el = nodes[i];
+                  var s = getComputedStyle(el);
+                  var bg = s.backgroundColor || '';
+                  var m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+                  if (!m) continue;
+                  var r = +m[1], g = +m[2], b = +m[3];
+                  var nearWhite = r > 235 && g > 235 && b > 235;
+                  var lightGrey = r > 200 && r < 250 && g > 200 && g < 250 && b > 200 && b < 250 &&
+                    Math.abs(r - g) < 10 && Math.abs(g - b) < 10;
+                  if (nearWhite) {
+                    el.style.setProperty('background-color','rgba(245,246,250,0.48)','important');
+                    el.style.setProperty('backdrop-filter','blur(22px)','important');
+                    el.style.setProperty('-webkit-backdrop-filter','blur(22px)','important');
+                  } else if (lightGrey) {
+                    el.style.setProperty('background','linear-gradient(180deg,rgba(255,255,255,0.7),rgba(232,236,244,0.45))','important');
+                    el.style.setProperty('border','1px solid rgba(255,255,255,0.62)','important');
+                    el.style.setProperty('border-radius','24px','important');
+                    el.style.setProperty('backdrop-filter','blur(18px)','important');
+                    el.style.setProperty('-webkit-backdrop-filter','blur(18px)','important');
+                  }
+                }
+              }
+              frost();
+              setTimeout(frost, 600);
+              setTimeout(frost, 1600);
+              try {
+                new MutationObserver(function(){ frost(); }).observe(document.documentElement,{childList:true,subtree:true});
+              } catch (e) {}
             })();
         """.trimIndent()
 
@@ -778,9 +834,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Google «Режим ИИ» as a fullscreen dialog with a pristine WebView.
-     * In-tab SPA navigation freezes paint on ColorOS WebView 150; a fresh WebView works.
-     * Close control lives in a top glass bar so it never covers Google's AI tabs.
+     * Google «Режим ИИ» as a frosted-glass dialog over a blurred snapshot of the page.
+     * In-tab SPA freezes ColorOS WebView paint; a fresh WebView + glass shell stays fluid.
      */
     private fun openGoogleAiModeDialog(url: String) {
         if (openingGoogleAi) return
@@ -789,152 +844,231 @@ class MainActivity : AppCompatActivity() {
             return
         }
         openingGoogleAi = true
+        snapshotActivityBackdrop { backdropBmp ->
+            try {
+                showGoogleAiModeDialog(url, backdropBmp)
+            } catch (_: Exception) {
+                openingGoogleAi = false
+                backdropBmp?.recycle()
+            }
+        }
+    }
+
+    private fun snapshotActivityBackdrop(onReady: (Bitmap?) -> Unit) {
+        val root = binding.root
+        if (root.width <= 0 || root.height <= 0) {
+            onReady(null)
+            return
+        }
+        val bmp = try {
+            Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
+        } catch (_: Exception) {
+            onReady(null)
+            return
+        }
         try {
-            val density = resources.displayMetrics.density
-            val root = android.widget.LinearLayout(this).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
+            PixelCopy.request(window, bmp, { result ->
+                if (result == PixelCopy.SUCCESS) onReady(bmp) else {
+                    bmp.recycle()
+                    onReady(null)
+                }
+            }, Handler(Looper.getMainLooper()))
+        } catch (_: Exception) {
+            try {
+                val c = android.graphics.Canvas(bmp)
+                root.draw(c)
+                onReady(bmp)
+            } catch (_: Exception) {
+                bmp.recycle()
+                onReady(null)
+            }
+        }
+    }
+
+    private fun showGoogleAiModeDialog(url: String, backdropBmp: Bitmap?) {
+        val density = resources.displayMetrics.density
+        val shell = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
+
+        val backdrop = android.widget.ImageView(this).apply {
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+            if (backdropBmp != null) {
+                setImageBitmap(backdropBmp)
+            } else {
                 setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.safari_page_bg))
             }
-            ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-                val bars = insets.getInsets(
-                    WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
-                )
-                val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-                // Top stays status-bar only so the glass header never jumps with IME.
-                // Bottom grows for nav / keyboard — WebView (weight=1) absorbs the delta.
-                val top = bars.top
-                val bottom = maxOf(bars.bottom, ime.bottom)
-                if (v.paddingTop != top || v.paddingBottom != bottom) {
-                    v.updatePadding(top = top, bottom = bottom)
-                }
-                insets
-            }
-
-            val hPad = (SafariSpace.sm * density).toInt()
-            val vPad = (SafariSpace.xs * density).toInt()
-            val barHeight = (SafariChrome.height * density).toInt()
-            val topBar = android.widget.FrameLayout(this).apply {
-                // Fixed height — IME / multi-window must not reflow the glass header.
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    barHeight
-                )
-                background = LiquidGlass.capsuleDrawable(
-                    this@MainActivity,
-                    settings.glassOpacity.coerceAtLeast(78),
-                    SafariRadii.capsule.toFloat()
-                )
-                setPadding(hPad, vPad, hPad, vPad)
-            }
-            LiquidGlass.polishCapsule(topBar, SafariRadii.capsule.toFloat(), pressFeedback = false)
-
-            val title = android.widget.TextView(this).apply {
-                text = "Режим ИИ"
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.safari_text))
-                textSize = 17f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
-                gravity = android.view.Gravity.CENTER
-            }
-            topBar.addView(
-                title,
-                android.widget.FrameLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                )
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        shell.addView(
+            backdrop,
+            android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT
             )
+        )
+        LiquidGlass.polishFrostedBackdrop(backdrop, LiquidGlass.blurRadiusPx(this))
 
-            val close = android.widget.ImageButton(this).apply {
-                setImageResource(R.drawable.ic_close)
-                contentDescription = "Закрыть"
-                background = LiquidGlass.circleDrawable(
-                    this@MainActivity,
-                    settings.glassOpacity.coerceAtLeast(78)
-                )
-                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-                val pad = (SafariChrome.btnPad * density).toInt()
-                setPadding(pad, pad, pad, pad)
-                setOnClickListener { dismissGoogleAiModeDialog() }
-            }
-            LiquidGlass.polishCircle(close)
-            val closeSize = (SafariChrome.btn * density).toInt()
-            topBar.addView(
-                close,
-                android.widget.FrameLayout.LayoutParams(closeSize, closeSize).apply {
-                    gravity = android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.END
-                    marginEnd = (SafariSpace.xs * density).toInt()
-                }
+        val bodyTint = View(this).apply {
+            background = LiquidGlass.dialogBodyDrawable(this@MainActivity, SafariGlass.bodyOpacity)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        shell.addView(
+            bodyTint,
+            android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT
             )
+        )
 
-            val barMargin = (SafariSpace.sm * density).toInt()
-            root.addView(
-                topBar,
-                android.widget.LinearLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    barHeight
-                ).apply {
-                    setMargins(barMargin, barMargin, barMargin, 0)
-                }
-            )
+        val root = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
 
-            val wv = WebView(this).apply {
-                setLayerType(View.LAYER_TYPE_NONE, null)
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
-                settings.userAgentString = binding.webView.settings.userAgentString
-                settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(
-                        view: WebView?,
-                        request: WebResourceRequest?
-                    ): Boolean {
-                        val u = request?.url?.toString().orEmpty()
-                        if (u.startsWith("http")) return false
-                        return true
-                    }
-                }
-                webChromeClient = WebChromeClient()
-            }
-            googleAiWebView = wv
-            root.addView(
-                wv,
-                android.widget.LinearLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    0,
-                    1f
-                )
-            )
+        val hPad = (SafariSpace.sm * density).toInt()
+        val glassOpacity = settings.glassOpacity.coerceIn(62, 88)
 
-            val dialog = android.app.Dialog(
-                this,
-                android.R.style.Theme_DeviceDefault_Light_NoActionBar_Fullscreen
-            )
-            dialog.setContentView(root)
-            dialog.window?.let { w ->
-                androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
-                ViewCompat.requestApplyInsets(root)
-            }
-            dialog.setOnDismissListener {
-                try {
-                    LiquidGlass.release(close)
-                    LiquidGlass.release(topBar)
-                    wv.stopLoading()
-                    wv.loadUrl("about:blank")
-                    (wv.parent as? android.view.ViewGroup)?.removeView(wv)
-                    wv.destroy()
-                } catch (_: Exception) {
+        val wv = WebView(this).apply {
+            setLayerType(View.LAYER_TYPE_NONE, null)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setBackgroundResource(android.R.color.transparent)
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+            settings.userAgentString = binding.webView.settings.userAgentString
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): Boolean {
+                    val u = request?.url?.toString().orEmpty()
+                    if (u.startsWith("http")) return false
+                    return true
                 }
-                googleAiWebView = null
-                googleAiDialog = null
-                openingGoogleAi = false
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    super.onPageFinished(view, url)
+                    view?.evaluateJavascript(AI_MODE_GLASS_JS, null)
+                }
             }
-            googleAiDialog = dialog
-            dialog.show()
-            wv.loadUrl(url)
-        } catch (_: Exception) {
+            webChromeClient = WebChromeClient()
+        }
+        googleAiWebView = wv
+        root.addView(
+            wv,
+            android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        // Floating close only — no full-width title bar eating the top.
+        val close = android.widget.ImageButton(this).apply {
+            setImageResource(R.drawable.ic_close)
+            contentDescription = "Закрыть"
+            background = LiquidGlass.circleDrawable(this@MainActivity, glassOpacity)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            val pad = (SafariChrome.btnPad * density).toInt()
+            setPadding(pad, pad, pad, pad)
+            imageAlpha = 180
+            elevation = 6f * density
+            setOnClickListener { dismissGoogleAiModeDialog() }
+        }
+        LiquidGlass.polishCircle(close)
+        val closeSize = (SafariChrome.btn * density).toInt()
+        val closeLp = android.widget.FrameLayout.LayoutParams(closeSize, closeSize).apply {
+            gravity = android.view.Gravity.TOP or android.view.Gravity.END
+            topMargin = (SafariSpace.sm * density).toInt()
+            marginEnd = hPad
+        }
+        root.addView(close, closeLp)
+
+        // Shrink WebView height (margin), not padding: Google uses position:fixed,
+        // and WebView padding does not lift that chrome above the nav bar.
+        // navigationBars inset is ~48dp with 3-button nav and ~16–24dp with gestures.
+        val applyAiInsets = { insets: WindowInsetsCompat ->
+            val typeBars =
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            val bars = insets.getInsets(typeBars)
+            val nav = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val activityInsets = ViewCompat.getRootWindowInsets(binding.root)
+            val activityNav = activityInsets
+                ?.getInsets(WindowInsetsCompat.Type.navigationBars())
+                ?.bottom
+                ?: 0
+            val activityTop = activityInsets?.getInsets(typeBars)?.top ?: 0
+            val bottom = maxOf(nav.bottom, ime.bottom, activityNav)
+            val wvLp = wv.layoutParams as android.widget.FrameLayout.LayoutParams
+            if (wvLp.bottomMargin != bottom) {
+                wvLp.bottomMargin = bottom
+                wv.layoutParams = wvLp
+            }
+            if (wv.paddingBottom != 0 || wv.paddingTop != 0) {
+                wv.updatePadding(top = 0, bottom = 0)
+            }
+            val wantTop = maxOf(bars.top, activityTop) + (SafariSpace.xs * density).toInt()
+            if (closeLp.topMargin != wantTop) {
+                closeLp.topMargin = wantTop
+                close.layoutParams = closeLp
+            }
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(shell) { _, insets ->
+            applyAiInsets(insets)
+            insets
+        }
+
+        shell.addView(
+            root,
+            android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        val dialog = android.app.Dialog(
+            this,
+            android.R.style.Theme_DeviceDefault_Light_NoActionBar_Fullscreen
+        )
+        dialog.setContentView(shell)
+        dialog.window?.let { w ->
+            WindowCompat.setDecorFitsSystemWindows(w, false)
+            w.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT)
+            )
+            w.statusBarColor = android.graphics.Color.TRANSPARENT
+            w.navigationBarColor = android.graphics.Color.TRANSPARENT
+        }
+        dialog.setOnShowListener {
+            val decor = dialog.window?.decorView ?: return@setOnShowListener
+            ViewCompat.requestApplyInsets(decor)
+            ViewCompat.requestApplyInsets(shell)
+            ViewCompat.getRootWindowInsets(shell)?.let(applyAiInsets)
+                ?: ViewCompat.getRootWindowInsets(binding.root)?.let(applyAiInsets)
+        }
+        dialog.setOnDismissListener {
+            try {
+                LiquidGlass.release(close)
+                LiquidGlass.release(backdrop)
+                wv.stopLoading()
+                wv.loadUrl("about:blank")
+                (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+                wv.destroy()
+            } catch (_: Exception) {
+            }
+            try {
+                backdropBmp?.recycle()
+            } catch (_: Exception) {
+            }
+            googleAiWebView = null
+            googleAiDialog = null
             openingGoogleAi = false
         }
+        googleAiDialog = dialog
+        dialog.show()
+        wv.loadUrl(url)
     }
 
     private fun dismissGoogleAiModeDialog() {

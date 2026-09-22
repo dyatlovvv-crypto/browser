@@ -37,6 +37,7 @@
     <color name="safari_glass_edge">#40FFFFFF</color>
     <color name="safari_glass_specular">#66FFFFFF</color>
     <color name="safari_glass_specular_mid">#24FFFFFF</color>
+    <color name="safari_glass_body">#A82C2C2E</color>
     <color name="safari_circle_fill">#2C2C2E</color>
     <color name="safari_chrome_scrim">#E61C1C1E</color>
     <color name="safari_chrome_scrim_mid">#991C1C1E</color>

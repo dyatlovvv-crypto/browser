@@ -44,6 +44,8 @@
     <color name="safari_glass_specular">#99FFFFFF</color>
     <!-- Mid stop: enough body to avoid soft-edge smear on white -->
     <color name="safari_glass_specular_mid">#33FFFFFF</color>
+    <!-- AI Mode / overlay body tint (~66% alpha) — page must show through -->
+    <color name="safari_glass_body">#A8EEF0F5</color>
     <color name="safari_circle_fill">#EEF0F5</color>
     <color name="safari_chrome_scrim">#E6F2F2F7</color>
     <color name="safari_chrome_scrim_mid">#99F2F2F7</color>

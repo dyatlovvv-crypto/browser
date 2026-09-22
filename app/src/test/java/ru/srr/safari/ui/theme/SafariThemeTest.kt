@@ -19,5 +19,7 @@ class SafariThemeTest {
         assertThat(SafariChrome.btn).isEqualTo(44)
         assertThat(SafariChrome.btnPad).isEqualTo(10)
         assertThat(SafariChrome.icon).isEqualTo(28)
+        assertThat(SafariGlass.blurDp).isEqualTo(28)
+        assertThat(SafariGlass.bodyOpacity).isEqualTo(66)
     }
 }

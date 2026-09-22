@@ -393,6 +393,8 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:background="@drawable/bg_chrome_scrim"
+        android:clipChildren="false"
+        android:clipToPadding="false"
         android:elevation="0dp"
         android:gravity="center_vertical"
         android:orientation="vertical"

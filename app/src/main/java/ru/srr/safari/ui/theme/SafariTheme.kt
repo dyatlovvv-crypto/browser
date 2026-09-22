@@ -30,3 +30,10 @@ object SafariChrome {
     const val btnPad = 10
     const val icon = 28
 }
+
+object SafariGlass {
+    /** Backdrop blur for AI Mode / frosted sheets (dp). */
+    const val blurDp = 28
+    /** Semi-transparent body tint over blurred page (percent). */
+    const val bodyOpacity = 66
+}

@@ -177,9 +177,29 @@ object LiquidGlass {
     /**
      * Frost a decorative backdrop layer (not interactive chrome).
      * API 31+: RenderEffect blur of the view's own pixels.
+     * Default radius ≥ 25dp for premium liquid glass.
      */
-    fun polishFrostedBackdrop(view: View, radiusPx: Float = 36f) {
-        applyBackdropBlur(view, radiusPx)
+    fun polishFrostedBackdrop(view: View, radiusPx: Float = 0f) {
+        val r = if (radiusPx > 0f) radiusPx else blurRadiusPx(view.context)
+        applyBackdropBlur(view, r)
+    }
+
+    fun blurRadiusPx(context: Context): Float {
+        val fromRes = try {
+            context.resources.getDimension(R.dimen.safari_glass_blur)
+        } catch (_: Exception) {
+            0f
+        }
+        return if (fromRes > 0f) fromRes else 28f * density(context)
+    }
+
+    /** Full-bleed translucent glass wash over a blurred page snapshot. */
+    fun dialogBodyDrawable(context: Context, opacityPercent: Int = 66): Drawable {
+        val fill = ContextCompat.getColor(context, R.color.safari_glass_fill)
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(withAlpha(fill, opacityPercent.coerceIn(40, 90)))
+        }
     }
 
     fun clearBlur(view: View) {
