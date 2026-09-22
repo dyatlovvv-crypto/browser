@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="tag_glass_press" type="id" />
+    <item name="tag_glass_outline" type="id" />
+    <item name="tag_glass_springs" type="id" />
+</resources>

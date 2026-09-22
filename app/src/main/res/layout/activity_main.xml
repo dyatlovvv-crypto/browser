@@ -23,7 +23,7 @@
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:clipToPadding="true"
-        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/bottomChrome"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
@@ -47,7 +47,7 @@
                 android:orientation="vertical"
                 android:paddingHorizontal="@dimen/safari_space_md"
                 android:paddingTop="@dimen/safari_space_md"
-                android:paddingBottom="128dp">
+                android:paddingBottom="@dimen/safari_space_xl">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -222,7 +222,7 @@
                 android:clipToPadding="false"
                 android:overScrollMode="never"
                 android:paddingStart="@dimen/safari_space_sm"
-                android:paddingTop="56dp"
+                android:paddingTop="@dimen/safari_space_xl"
                 android:paddingEnd="@dimen/safari_space_sm"
                 android:paddingBottom="112dp" />
 
@@ -392,7 +392,7 @@
         android:id="@+id/bottomChrome"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:background="@android:color/transparent"
+        android:background="@drawable/bg_chrome_scrim"
         android:elevation="0dp"
         android:gravity="center_vertical"
         android:orientation="vertical"
@@ -407,7 +407,7 @@
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
             android:layout_height="2dp"
-            android:layout_marginBottom="6dp"
+            android:layout_marginBottom="@dimen/safari_space_xs"
             android:max="100"
             android:progressDrawable="@drawable/bg_progress"
             android:visibility="gone" />
@@ -415,18 +415,18 @@
         <LinearLayout
             android:id="@+id/toolbarRow"
             android:layout_width="match_parent"
-            android:layout_height="52dp"
+            android:layout_height="@dimen/safari_chrome_height"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
             <ImageButton
                 android:id="@+id/btnBack"
-                android:layout_width="44dp"
-                android:layout_height="44dp"
+                android:layout_width="@dimen/safari_chrome_btn"
+                android:layout_height="@dimen/safari_chrome_btn"
                 android:background="@drawable/bg_circle_glass"
                 android:contentDescription="Назад"
-                android:padding="11dp"
-                android:scaleType="centerInside"
+                android:padding="@dimen/safari_chrome_btn_pad"
+                android:scaleType="fitCenter"
                 android:src="@drawable/ic_nav_back"
                 app:tint="@null"
                 android:tint="@null" />
@@ -434,23 +434,23 @@
             <LinearLayout
                 android:id="@+id/addressCapsule"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="@dimen/safari_chrome_btn"
                 android:layout_marginHorizontal="@dimen/safari_space_sm"
                 android:layout_weight="1"
                 android:background="@drawable/bg_capsule_glass"
                 android:elevation="0dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:paddingHorizontal="10dp">
+                android:paddingHorizontal="@dimen/safari_space_sm">
 
                 <ImageButton
                     android:id="@+id/btnAa"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
+                    android:layout_width="@dimen/safari_chrome_icon"
+                    android:layout_height="@dimen/safari_chrome_icon"
                     android:background="?attr/selectableItemBackgroundBorderless"
                     android:contentDescription="Аа"
-                    android:padding="2dp"
-                    android:scaleType="centerInside"
+                    android:padding="0dp"
+                    android:scaleType="fitCenter"
                     android:src="@drawable/ic_search"
                     app:tint="@null"
                     android:tint="@null" />
@@ -476,12 +476,12 @@
 
                 <ImageButton
                     android:id="@+id/btnClearField"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
+                    android:layout_width="@dimen/safari_chrome_icon"
+                    android:layout_height="@dimen/safari_chrome_icon"
                     android:background="?attr/selectableItemBackgroundBorderless"
                     android:contentDescription="Очистить"
-                    android:padding="2dp"
-                    android:scaleType="centerInside"
+                    android:padding="0dp"
+                    android:scaleType="fitCenter"
                     android:src="@drawable/ic_clear_field"
                     android:visibility="gone"
                     app:tint="@null"
@@ -489,12 +489,12 @@
 
                 <ImageButton
                     android:id="@+id/btnReload"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
+                    android:layout_width="@dimen/safari_chrome_icon"
+                    android:layout_height="@dimen/safari_chrome_icon"
                     android:background="?attr/selectableItemBackgroundBorderless"
                     android:contentDescription="Обновить"
-                    android:padding="2dp"
-                    android:scaleType="centerInside"
+                    android:padding="0dp"
+                    android:scaleType="fitCenter"
                     android:src="@drawable/ic_reload"
                     android:visibility="gone"
                     app:tint="@null"
@@ -503,12 +503,12 @@
 
             <ImageButton
                 android:id="@+id/btnMore"
-                android:layout_width="44dp"
-                android:layout_height="44dp"
+                android:layout_width="@dimen/safari_chrome_btn"
+                android:layout_height="@dimen/safari_chrome_btn"
                 android:background="@drawable/bg_circle_glass"
                 android:contentDescription="Ещё"
-                android:padding="11dp"
-                android:scaleType="centerInside"
+                android:padding="@dimen/safari_chrome_btn_pad"
+                android:scaleType="fitCenter"
                 android:src="@drawable/ic_more"
                 app:tint="@null"
                 android:tint="@null" />

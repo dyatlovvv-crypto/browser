@@ -12,10 +12,11 @@ import android.view.View
 import android.view.ViewOutlineProvider
 import androidx.core.content.ContextCompat
 import androidx.dynamicanimation.animation.DynamicAnimation
+import androidx.dynamicanimation.animation.SpringAnimation
 import ru.srr.safari.R
 import ru.srr.safari.data.BrowserSettings
 
-/** Liquid Glass: blur (API 31+), stroke refraction, squircle clip, spring press. */
+/** Liquid Glass: refraction strokes, specular, squircle clip, spring press (no dup listeners). */
 object LiquidGlass {
 
     fun alphaByte(opacityPercent: Int): Int {
@@ -32,7 +33,7 @@ object LiquidGlass {
         view.background = d
     }
 
-    fun capsuleDrawable(context: Context, opacityPercent: Int, cornerDp: Float = 22f): Drawable {
+    fun capsuleDrawable(context: Context, opacityPercent: Int, cornerDp: Float = 24f): Drawable {
         val d = density(context)
         return glassRect(
             context,
@@ -51,28 +52,34 @@ object LiquidGlass {
     /** Mutate body fill of a [modeBlobDrawable] without reallocating layers. */
     fun updateModeBlobFill(drawable: Drawable?, fillRgb: Int, opacityPercent: Int): Boolean {
         val layer = drawable as? LayerDrawable ?: return false
-        val body = layer.getDrawable(0) as? GradientDrawable ?: return false
+        // Body is index 1 after edge layer.
+        val body = layer.getDrawable(1) as? GradientDrawable ?: return false
         body.setColor(withAlpha(fillRgb or 0xFF000000.toInt(), opacityPercent.coerceIn(70, 100)))
         return true
     }
 
     /**
      * Menu / sheet glass with denser scrim so text stays readable over web pages.
-     * Light: apple grey-white ~72–80% + tint scrim.
-     * Private: true-black scrim ~75% under glass body.
+     * Light: apple grey-white + tint scrim. Private: true-black scrim under glass body.
      */
     fun menuPopoverDrawable(
         context: Context,
         opacityPercent: Int,
-        cornerDp: Float = 26f,
+        cornerDp: Float = 28f,
         privateMode: Boolean = false
     ): Drawable {
         val d = density(context)
         val cornerPx = cornerDp * d
-        val strokeW = (1.1f * d).toInt().coerceAtLeast(1)
-        val floor = if (privateMode) 75 else 72
+        val strokeW = (1f * d).toInt().coerceAtLeast(1)
+        val floor = if (privateMode) 80 else 76
         val bodyOpacity = opacityPercent.coerceIn(floor, 100)
 
+        val edge = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = cornerPx
+            setColor(0x00000000)
+            setStroke(strokeW, ContextCompat.getColor(context, R.color.safari_glass_edge))
+        }
         val scrim = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = cornerPx
@@ -97,6 +104,7 @@ object LiquidGlass {
             cornerRadius = cornerPx
             colors = intArrayOf(
                 ContextCompat.getColor(context, R.color.safari_glass_specular),
+                ContextCompat.getColor(context, R.color.safari_glass_specular_mid),
                 0x00FFFFFF
             )
             orientation = GradientDrawable.Orientation.TOP_BOTTOM
@@ -116,14 +124,13 @@ object LiquidGlass {
                 ContextCompat.getColor(context, R.color.safari_glass_inner_stroke)
             )
         }
-        return LayerDrawable(arrayOf(scrim, body, specular, stroke, innerHighlight)).apply {
-            val inset = strokeW
-            setLayerInset(4, inset, inset, inset, inset)
+        return LayerDrawable(arrayOf(edge, scrim, body, specular, stroke, innerHighlight)).apply {
+            setLayerInset(5, strokeW, strokeW, strokeW, strokeW)
         }
     }
 
     /** @deprecated Prefer [menuPopoverDrawable] for menus; kept for address chrome. */
-    fun popoverDrawable(context: Context, opacityPercent: Int, cornerDp: Float = 26f): Drawable {
+    fun popoverDrawable(context: Context, opacityPercent: Int, cornerDp: Float = 28f): Drawable {
         return menuPopoverDrawable(context, opacityPercent, cornerDp, privateMode = false)
     }
 
@@ -135,13 +142,10 @@ object LiquidGlass {
         )
     }
 
-    fun polishCapsule(view: View, cornerDp: Float = 22f, pressFeedback: Boolean = true) {
+    fun polishCapsule(view: View, cornerDp: Float = 24f, pressFeedback: Boolean = true) {
         view.clipToOutline = true
         view.outlineProvider = SquircleOutlineProvider(cornerDp)
-        view.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            v.invalidateOutline()
-        }
-        // Glass = translucent fill + inner stroke (blur not applied to chrome text/icons).
+        attachOutlineInvalidator(view)
         if (pressFeedback) attachSpringPress(view, 0.97f)
     }
 
@@ -152,6 +156,7 @@ object LiquidGlass {
                 outline.setOval(0, 0, v.width, v.height)
             }
         }
+        attachOutlineInvalidator(view)
         attachSpringPress(view, 0.94f)
     }
 
@@ -166,17 +171,14 @@ object LiquidGlass {
     fun polishTabCard(view: View, cornerDp: Float = 18f) {
         view.clipToOutline = true
         view.outlineProvider = SquircleOutlineProvider(cornerDp)
-        view.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            v.invalidateOutline()
-        }
+        attachOutlineInvalidator(view)
     }
 
     /**
      * Frost a decorative backdrop layer (not interactive chrome).
      * API 31+: RenderEffect blur of the view's own pixels.
-     * Older: no-op — rely on translucent XML fill + stroke.
      */
-    fun polishFrostedBackdrop(view: View, radiusPx: Float = 32f) {
+    fun polishFrostedBackdrop(view: View, radiusPx: Float = 36f) {
         applyBackdropBlur(view, radiusPx)
     }
 
@@ -184,6 +186,31 @@ object LiquidGlass {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             view.setRenderEffect(null)
         }
+    }
+
+    /** Cancel in-flight press springs (call from Activity onDestroy / dialog dismiss). */
+    fun clearPress(view: View) {
+        cancelPressSprings(view)
+        view.scaleX = 1f
+        view.scaleY = 1f
+        if (view.getTag(R.id.tag_glass_press) == true) {
+            view.setOnTouchListener(null)
+            view.setTag(R.id.tag_glass_press, null)
+        }
+    }
+
+    /** Remove outline invalidator so config-recreated / dialog views do not retain listeners. */
+    fun clearOutline(view: View) {
+        val listener = view.getTag(R.id.tag_glass_outline) as? View.OnLayoutChangeListener ?: return
+        view.removeOnLayoutChangeListener(listener)
+        view.setTag(R.id.tag_glass_outline, null)
+    }
+
+    /** Full glass teardown for destroy / dialog dismiss. */
+    fun release(view: View) {
+        clearPress(view)
+        clearOutline(view)
+        clearBlur(view)
     }
 
     private fun applyBackdropBlur(view: View, radiusPx: Float) {
@@ -204,7 +231,13 @@ object LiquidGlass {
         cornerPx: Float,
         opacityPercent: Int
     ): Drawable {
-        val strokeW = (1.1f * density(context)).toInt().coerceAtLeast(1)
+        val strokeW = (1f * density(context)).toInt().coerceAtLeast(1)
+        val edge = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = cornerPx
+            setColor(0x00000000)
+            setStroke(strokeW, ContextCompat.getColor(context, R.color.safari_glass_edge))
+        }
         val body = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = cornerPx
@@ -215,6 +248,7 @@ object LiquidGlass {
             cornerRadius = cornerPx
             colors = intArrayOf(
                 ContextCompat.getColor(context, R.color.safari_glass_specular),
+                ContextCompat.getColor(context, R.color.safari_glass_specular_mid),
                 0x00FFFFFF
             )
             orientation = GradientDrawable.Orientation.TOP_BOTTOM
@@ -234,14 +268,18 @@ object LiquidGlass {
                 ContextCompat.getColor(context, R.color.safari_glass_inner_stroke)
             )
         }
-        return LayerDrawable(arrayOf(body, specular, stroke, innerHighlight)).apply {
-            val inset = strokeW
-            setLayerInset(3, inset, inset, inset, inset)
+        return LayerDrawable(arrayOf(edge, body, specular, stroke, innerHighlight)).apply {
+            setLayerInset(4, strokeW, strokeW, strokeW, strokeW)
         }
     }
 
     private fun glassOval(context: Context, fill: Int, opacityPercent: Int): Drawable {
-        val strokeW = (1.1f * density(context)).toInt().coerceAtLeast(1)
+        val strokeW = (1f * density(context)).toInt().coerceAtLeast(1)
+        val edge = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(0x00000000)
+            setStroke(strokeW, ContextCompat.getColor(context, R.color.safari_glass_edge))
+        }
         val body = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(withAlpha(fill, opacityPercent))
@@ -250,6 +288,7 @@ object LiquidGlass {
             shape = GradientDrawable.OVAL
             colors = intArrayOf(
                 ContextCompat.getColor(context, R.color.safari_glass_specular),
+                ContextCompat.getColor(context, R.color.safari_glass_specular_mid),
                 0x00FFFFFF
             )
             orientation = GradientDrawable.Orientation.TL_BR
@@ -259,7 +298,17 @@ object LiquidGlass {
             setColor(0x00000000)
             setStroke(strokeW, ContextCompat.getColor(context, R.color.safari_glass_stroke))
         }
-        return LayerDrawable(arrayOf(body, specular, stroke))
+        val innerHighlight = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(0x00000000)
+            setStroke(
+                strokeW,
+                ContextCompat.getColor(context, R.color.safari_glass_inner_stroke)
+            )
+        }
+        return LayerDrawable(arrayOf(edge, body, specular, stroke, innerHighlight)).apply {
+            setLayerInset(4, strokeW, strokeW, strokeW, strokeW)
+        }
     }
 
     private fun withAlpha(color: Int, opacityPercent: Int): Int {
@@ -270,28 +319,49 @@ object LiquidGlass {
     private fun density(context: Context): Float =
         context.resources.displayMetrics.density
 
+    private fun attachOutlineInvalidator(view: View) {
+        if (view.getTag(R.id.tag_glass_outline) != null) return
+        val listener = View.OnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            v.invalidateOutline()
+        }
+        view.setTag(R.id.tag_glass_outline, listener)
+        view.addOnLayoutChangeListener(listener)
+    }
+
+    private fun cancelPressSprings(view: View) {
+        @Suppress("UNCHECKED_CAST")
+        val springs = view.getTag(R.id.tag_glass_springs) as? Array<SpringAnimation>
+        springs?.forEach { anim ->
+            try {
+                anim.cancel()
+            } catch (_: Exception) {
+            }
+        }
+        view.setTag(R.id.tag_glass_springs, null)
+    }
+
     private fun attachSpringPress(view: View, pressedScale: Float) {
+        if (view.getTag(R.id.tag_glass_press) == true) return
+        view.setTag(R.id.tag_glass_press, true)
         view.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    SafariMotion.spring(
-                        v, DynamicAnimation.SCALE_X, pressedScale,
-                        SafariMotion.STIFFNESS, SafariMotion.DAMPING
-                    )
-                    SafariMotion.spring(
-                        v, DynamicAnimation.SCALE_Y, pressedScale,
-                        SafariMotion.STIFFNESS, SafariMotion.DAMPING
-                    )
+                    cancelPressSprings(v)
+                    // Instant optical press — no wait for spring settle.
+                    v.scaleX = pressedScale
+                    v.scaleY = pressedScale
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    SafariMotion.spring(
+                    cancelPressSprings(v)
+                    val sx = SafariMotion.spring(
                         v, DynamicAnimation.SCALE_X, 1f,
                         SafariMotion.STIFFNESS, SafariMotion.DAMPING
                     )
-                    SafariMotion.spring(
+                    val sy = SafariMotion.spring(
                         v, DynamicAnimation.SCALE_Y, 1f,
                         SafariMotion.STIFFNESS, SafariMotion.DAMPING
                     )
+                    v.setTag(R.id.tag_glass_springs, arrayOf(sx, sy))
                 }
             }
             false

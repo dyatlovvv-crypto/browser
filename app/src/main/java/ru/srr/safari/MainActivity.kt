@@ -91,6 +91,8 @@ import ru.srr.safari.ui.GlassSheet
 import ru.srr.safari.ui.LiquidGlass
 import ru.srr.safari.ui.SafariMotion
 import ru.srr.safari.ui.TabsModeLiquidSwitch
+import ru.srr.safari.ui.theme.SafariChrome
+import ru.srr.safari.ui.theme.SafariRadii
 import ru.srr.safari.ui.theme.SafariSpace
 import androidx.dynamicanimation.animation.SpringForce
 import java.io.File
@@ -252,33 +254,38 @@ class MainActivity : AppCompatActivity() {
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             val imeBottom = ime.bottom
             val navBottom = bars.bottom
+            val density = resources.displayMetrics.density
 
             binding.contentContainer.updatePadding(top = bars.top)
             binding.historyOverlay.getChildAt(0)?.updatePadding(
-                top = bars.top + (12 * resources.displayMetrics.density).toInt()
+                top = bars.top + (SafariSpace.sm * 1.5f * density).toInt()
             )
             binding.tabsList.updatePadding(
-                top = bars.top + (56 * resources.displayMetrics.density).toInt(),
+                top = bars.top + ((SafariSpace.xl + SafariSpace.md) * density).toInt(),
                 bottom = binding.tabsList.paddingBottom
             )
             (binding.btnTabsMenu.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let { lp ->
-                val top = bars.top + (8 * resources.displayMetrics.density).toInt()
+                val top = bars.top + (SafariSpace.sm * density).toInt()
                 if (lp.topMargin != top) {
                     lp.topMargin = top
                     binding.btnTabsMenu.layoutParams = lp
                 }
             }
             binding.tabsPrivateEmpty.updatePadding(
-                top = bars.top + (100 * resources.displayMetrics.density).toInt()
+                top = bars.top + (SafariSpace.xl * 3 * density).toInt()
             )
             binding.readerOverlay.updatePadding(top = bars.top, bottom = navBottom)
+            binding.historyList.updatePadding(
+                bottom = navBottom + (SafariSpace.xl * 3 * density).toInt()
+            )
 
             binding.bottomChrome.updatePadding(bottom = maxOf(navBottom, imeBottom))
-            // No opaque slab under chrome — transparent over page / wallpaper
-            binding.bottomChrome.setBackgroundResource(android.R.color.transparent)
+            if (binding.bottomChrome.background == null) {
+                binding.bottomChrome.setBackgroundResource(R.drawable.bg_chrome_scrim)
+            }
             binding.tabsBottomBar.updatePadding(bottom = 0)
             (binding.tabsBottomBar.layoutParams as? android.widget.FrameLayout.LayoutParams)?.let { lp ->
-                val bottom = navBottom + (10 * resources.displayMetrics.density).toInt()
+                val bottom = navBottom + ((SafariSpace.sm + SafariSpace.xs) * density).toInt()
                 if (lp.bottomMargin != bottom) {
                     lp.bottomMargin = bottom
                     binding.tabsBottomBar.layoutParams = lp
@@ -289,7 +296,6 @@ class MainActivity : AppCompatActivity() {
             if (keyboardOpen != imeVisible) {
                 imeVisible = keyboardOpen
                 if (keyboardOpen) {
-                    // Keyboard up: keep chrome pinned, no mid-collapse leftovers
                     chromeCollapsed = false
                     binding.bottomChrome.animate().cancel()
                     binding.bottomChrome.translationY = 0f
@@ -298,8 +304,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Floating chrome overlays the page — do not shrink WebView (that left
-            // an opaque page_bg slab under the address bar).
+            // Keep page docked above glass chrome (split-screen / rotation / IME).
             binding.bottomChrome.post { syncContentAboveChrome() }
             insets
         }
@@ -358,6 +363,34 @@ class MainActivity : AppCompatActivity() {
             binding.webView.post { binding.webView.invalidate() }
         } catch (_: Exception) {
         }
+    }
+
+    override fun onDestroy() {
+        previewCaptureRunnable?.let { previewHandler.removeCallbacks(it) }
+        previewHandler.removeCallbacksAndMessages(null)
+        dismissGoogleAiModeDialog()
+        if (::binding.isInitialized) {
+            try {
+                binding.bottomChrome.animate().cancel()
+                LiquidGlass.release(binding.btnBack)
+                LiquidGlass.release(binding.btnMore)
+                LiquidGlass.release(binding.btnNewTab)
+                LiquidGlass.release(binding.btnTabsDone)
+                LiquidGlass.release(binding.btnTabsMenu)
+                LiquidGlass.release(binding.addressCapsule)
+                binding.webView.stopLoading()
+                binding.webView.destroy()
+            } catch (_: Exception) {
+            }
+        }
+        super.onDestroy()
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (!::binding.isInitialized) return
+        ViewCompat.requestApplyInsets(binding.root)
+        binding.bottomChrome.post { syncContentAboveChrome() }
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
@@ -747,6 +780,7 @@ class MainActivity : AppCompatActivity() {
     /**
      * Google «Режим ИИ» as a fullscreen dialog with a pristine WebView.
      * In-tab SPA navigation freezes paint on ColorOS WebView 150; a fresh WebView works.
+     * Close control lives in a top glass bar so it never covers Google's AI tabs.
      */
     private fun openGoogleAiModeDialog(url: String) {
         if (openingGoogleAi) return
@@ -757,7 +791,91 @@ class MainActivity : AppCompatActivity() {
         openingGoogleAi = true
         try {
             val density = resources.displayMetrics.density
-            val root = android.widget.FrameLayout(this)
+            val root = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.safari_page_bg))
+            }
+            ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+                val bars = insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+                )
+                val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+                // Top stays status-bar only so the glass header never jumps with IME.
+                // Bottom grows for nav / keyboard — WebView (weight=1) absorbs the delta.
+                val top = bars.top
+                val bottom = maxOf(bars.bottom, ime.bottom)
+                if (v.paddingTop != top || v.paddingBottom != bottom) {
+                    v.updatePadding(top = top, bottom = bottom)
+                }
+                insets
+            }
+
+            val hPad = (SafariSpace.sm * density).toInt()
+            val vPad = (SafariSpace.xs * density).toInt()
+            val barHeight = (SafariChrome.height * density).toInt()
+            val topBar = android.widget.FrameLayout(this).apply {
+                // Fixed height — IME / multi-window must not reflow the glass header.
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    barHeight
+                )
+                background = LiquidGlass.capsuleDrawable(
+                    this@MainActivity,
+                    settings.glassOpacity.coerceAtLeast(78),
+                    SafariRadii.capsule.toFloat()
+                )
+                setPadding(hPad, vPad, hPad, vPad)
+            }
+            LiquidGlass.polishCapsule(topBar, SafariRadii.capsule.toFloat(), pressFeedback = false)
+
+            val title = android.widget.TextView(this).apply {
+                text = "Режим ИИ"
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.safari_text))
+                textSize = 17f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                gravity = android.view.Gravity.CENTER
+            }
+            topBar.addView(
+                title,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+
+            val close = android.widget.ImageButton(this).apply {
+                setImageResource(R.drawable.ic_close)
+                contentDescription = "Закрыть"
+                background = LiquidGlass.circleDrawable(
+                    this@MainActivity,
+                    settings.glassOpacity.coerceAtLeast(78)
+                )
+                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                val pad = (SafariChrome.btnPad * density).toInt()
+                setPadding(pad, pad, pad, pad)
+                setOnClickListener { dismissGoogleAiModeDialog() }
+            }
+            LiquidGlass.polishCircle(close)
+            val closeSize = (SafariChrome.btn * density).toInt()
+            topBar.addView(
+                close,
+                android.widget.FrameLayout.LayoutParams(closeSize, closeSize).apply {
+                    gravity = android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.END
+                    marginEnd = (SafariSpace.xs * density).toInt()
+                }
+            )
+
+            val barMargin = (SafariSpace.sm * density).toInt()
+            root.addView(
+                topBar,
+                android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    barHeight
+                ).apply {
+                    setMargins(barMargin, barMargin, barMargin, 0)
+                }
+            )
+
             val wv = WebView(this).apply {
                 setLayerType(View.LAYER_TYPE_NONE, null)
                 settings.javaScriptEnabled = true
@@ -781,39 +899,29 @@ class MainActivity : AppCompatActivity() {
             googleAiWebView = wv
             root.addView(
                 wv,
-                android.widget.FrameLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                    0,
+                    1f
                 )
             )
-            val close = android.widget.ImageButton(this).apply {
-                setImageResource(R.drawable.ic_close)
-                contentDescription = "Закрыть"
-                setBackgroundResource(R.drawable.bg_circle_glass)
-                setOnClickListener { dismissGoogleAiModeDialog() }
-                elevation = 8f * density
-            }
-            val closeSize = (44 * density).toInt()
-            val pad = (12 * density).toInt()
-            val statusTop = ViewCompat.getRootWindowInsets(binding.root)
-                ?.getInsets(WindowInsetsCompat.Type.statusBars())?.top ?: 0
-            root.addView(
-                close,
-                android.widget.FrameLayout.LayoutParams(closeSize, closeSize).apply {
-                    gravity = android.view.Gravity.TOP or android.view.Gravity.END
-                    topMargin = pad + statusTop
-                    marginEnd = pad
-                }
-            )
+
             val dialog = android.app.Dialog(
                 this,
                 android.R.style.Theme_DeviceDefault_Light_NoActionBar_Fullscreen
             )
             dialog.setContentView(root)
+            dialog.window?.let { w ->
+                androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
+                ViewCompat.requestApplyInsets(root)
+            }
             dialog.setOnDismissListener {
                 try {
+                    LiquidGlass.release(close)
+                    LiquidGlass.release(topBar)
                     wv.stopLoading()
                     wv.loadUrl("about:blank")
+                    (wv.parent as? android.view.ViewGroup)?.removeView(wv)
                     wv.destroy()
                 } catch (_: Exception) {
                 }
@@ -859,16 +967,49 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Floating chrome sits over the page (iOS Safari). Never shrink the WebView /
-     * inject DOM layout hacks — those blanked Google AI Mode and other SPAs.
+     * Dock content above the floating glass chrome so the page never sits under
+     * the address bar. Overlays / collapsed chrome use full-bleed again.
+     * AI Mode stays in its own dialog — safe to resize the main WebView.
      */
     private fun syncContentAboveChrome() {
-        val lp = binding.contentContainer.layoutParams as androidx.constraintlayout.widget.ConstraintLayout.LayoutParams
-        if (lp.bottomMargin != 0) {
+        val lp = binding.contentContainer.layoutParams
+            as androidx.constraintlayout.widget.ConstraintLayout.LayoutParams
+        val overlaysOpen =
+            binding.tabsOverlay.visibility == View.VISIBLE ||
+                binding.historyOverlay.visibility == View.VISIBLE ||
+                binding.readerOverlay.visibility == View.VISIBLE
+        val chromeDocked =
+            binding.bottomChrome.visibility == View.VISIBLE &&
+                !chromeCollapsed &&
+                !overlaysOpen
+
+        val parentId = androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.PARENT_ID
+        val unset = androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.UNSET
+        var changed = false
+        if (chromeDocked) {
+            if (lp.bottomToTop != binding.bottomChrome.id) {
+                lp.bottomToBottom = unset
+                lp.bottomToTop = binding.bottomChrome.id
+                lp.bottomMargin = 0
+                changed = true
+            }
+        } else if (lp.bottomToBottom != parentId || lp.bottomToTop != unset) {
+            lp.bottomToTop = unset
+            lp.bottomToBottom = parentId
             lp.bottomMargin = 0
-            binding.contentContainer.layoutParams = lp
+            changed = true
         }
-        val startPad = (SafariSpace.xl * 4 * resources.displayMetrics.density).toInt()
+        if (changed) binding.contentContainer.layoutParams = lp
+
+        val density = resources.displayMetrics.density
+        val startPad = if (chromeDocked) {
+            (SafariSpace.md * density).toInt()
+        } else {
+            val chromeH = binding.bottomChrome.height.coerceAtLeast(
+                ((SafariChrome.height + SafariSpace.sm + SafariSpace.md) * density).toInt()
+            )
+            chromeH + (SafariSpace.md * density).toInt()
+        }
         if (binding.startPage.paddingBottom != startPad) {
             binding.startPage.updatePadding(bottom = startPad)
         }
@@ -935,7 +1076,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupChrome() {
         LiquidGlass.polishChrome(binding.bottomChrome)
         // No press OnTouchListener here — AddressTabSwipe owns capsule touches
-        LiquidGlass.polishCapsule(binding.addressCapsule, pressFeedback = false)
+        LiquidGlass.polishCapsule(binding.addressCapsule, SafariRadii.capsule.toFloat(), pressFeedback = false)
         LiquidGlass.polishCircle(binding.btnBack)
         LiquidGlass.polishCircle(binding.btnMore)
         LiquidGlass.polishSheet(binding.tabsOverlay)
@@ -947,7 +1088,7 @@ class MainActivity : AppCompatActivity() {
         setupAddressTabSwipe()
         setupEdgeBackGesture()
         refreshTabsModeChrome()
-        LiquidGlass.polishCapsule(binding.historyToolbar, 22f)
+        LiquidGlass.polishCapsule(binding.historyToolbar, SafariRadii.capsule.toFloat())
         LiquidGlass.polishSheet(binding.suggestionsList)
         LiquidGlass.polishSheet(binding.btnCloseReader)
         binding.addressBar.setTextAppearance(R.style.TextAppearance_Safari_Address)
@@ -1184,12 +1325,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyGlassOpacity() {
         val o = settings.glassOpacity
-        binding.addressCapsule.background = LiquidGlass.capsuleDrawable(this, o, 22f)
+        val corner = SafariRadii.capsule.toFloat()
+        binding.addressCapsule.background = LiquidGlass.capsuleDrawable(this, o, corner)
         binding.btnBack.background = LiquidGlass.circleDrawable(this, o)
         binding.btnMore.background = LiquidGlass.circleDrawable(this, o)
         binding.btnNewTab.background = LiquidGlass.circleDrawable(this, o)
         binding.btnTabsMenu.background = LiquidGlass.circleDrawable(this, o)
-        binding.historyToolbar.background = LiquidGlass.capsuleDrawable(this, o, 22f)
+        binding.historyToolbar.background = LiquidGlass.capsuleDrawable(this, o, corner)
         LiquidGlass.applyOpacity(binding.btnTabsDone, o)
         // Tabs overlay backdrop stays dense — page must not bleed through
         LiquidGlass.applyOpacity(binding.historyOverlay, o)
@@ -1844,6 +1986,11 @@ class MainActivity : AppCompatActivity() {
         val target = UrlUtils.rewriteKnownRedirects(url)
         if (target.isBlank() || target == "about:blank") {
             showStartPage()
+            return
+        }
+        // Direct loads (intent / address) skip shouldOverride — open AI Mode in dialog.
+        if (UrlUtils.isFragileFullViewportUrl(target)) {
+            openGoogleAiModeDialog(target)
             return
         }
         active.url = target

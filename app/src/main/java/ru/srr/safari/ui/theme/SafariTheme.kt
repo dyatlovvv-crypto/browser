@@ -14,8 +14,19 @@ object SafariSpace {
 
 object SafariRadii {
     const val card = 20
+    const val capsule = 24
+    const val chrome = 24
+    const val sheet = 28
 }
 
 object SafariElevation {
     const val card = 2
+}
+
+object SafariChrome {
+    const val height = 52
+    const val btn = 44
+    /** (btn − 24dp glyph) / 2 — keeps icons optically centered in glass circles. */
+    const val btnPad = 10
+    const val icon = 28
 }
